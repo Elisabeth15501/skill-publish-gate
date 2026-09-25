@@ -1,0 +1,185 @@
+{
+  "version": "1.2.0",
+  "description": "SkillHub 发布前本地门禁规范库。对照 skillhub-publish 技能已验证的发布卡点与 SkillHub 三线审核规则。",
+  "spec": {
+    "frontmatter": {
+      "required": ["slug", "version", "displayName"],
+      "recommended": ["name", "description", "summary", "tags"],
+      "slug_pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "slug_min": 2,
+      "slug_max": 128,
+      "semver_pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$"
+    },
+    "forbidden_files": [
+      ".gitignore",
+      ".nojekyll",
+      "LICENSE",
+      "LICENSE.md",
+      "LICENSE.txt",
+      ".github",
+      ".git",
+      "__pycache__",
+      ".clawhubignore",
+      ".pytest_cache",
+      ".allure-results",
+      "allure-results"
+    ],
+    "github_allowed_files": [
+      "LICENSE",
+      "LICENSE.md",
+      "LICENSE.txt",
+      ".github"
+    ],
+    "forbidden_globs": ["*.pyc", "*.pyo", "*.class", ".DS_Store", "*.egg-info"],
+    "bundle": {
+      "warn_file_count": 100,
+      "max_file_count": 1000,
+      "warn_total_bytes": 10485760,
+      "max_total_bytes": 52428800
+    },
+    "version_locations": ["SKILL.md", "config.json", "metadata.json", "CHANGELOG.md"],
+    "artifact_dirs": ["allure-results", ".pytest_cache", "data", "__pycache__"]
+  },
+  "rules": [
+    {
+      "id": "RED-NET-001",
+      "category": "CONTENT",
+      "severity": "critical",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": ["docs", "scripts"],
+      "patterns": ["翻墙", "翻牆", "科学上网", "科學上網", "梯子", "GFW", "突破网络", "突破防火"],
+      "self_describing_markers": ["网络规避", "敏感词", "合规"],
+      "description": "命中网络规避敏感词，将触发 SkillHub 内容合规审核拒绝（下架风险）。删除相关表述，不要在任何语言（文档/注释/输出字符串）中出现。",
+      "legal_source": "SkillHub 内容审核红线（三线并行：内容合规过滤）"
+    },
+    {
+      "id": "RED-NET-002",
+      "category": "CONTENT",
+      "severity": "critical",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": ["docs", "scripts"],
+      "patterns": ["shadowsocks", "v2ray", "clash", "trojan", "wireguard", "ssr", "vless", "vmess"],
+      "self_describing_markers": ["网络规避", "敏感词", "合规", "代理工具"],
+      "description": "命中代理工具同族词（shadowsocks/v2ray/clash/trojan 等），属网络规避敏感家族，会触发内容审核拒绝。除非技能本身合法且已获授权，否则删除。",
+      "legal_source": "SkillHub 内容审核红线"
+    },
+    {
+      "id": "RED-NET-003",
+      "category": "CONTENT",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": ["docs", "scripts"],
+      "patterns": ["机场", "节点订阅", "订阅链接", "vpn 节点", "翻墙节点"],
+      "exclude_patterns": ["机场代码", "国际机场", "航空"],
+      "self_describing_markers": ["网络规避", "敏感词", "合规"],
+      "description": "「机场 / 节点订阅」在中文语境通常指代理服务，属敏感家族。确认无规避网络管理表述后再发布。",
+      "legal_source": "SkillHub 内容审核红线"
+    },
+    {
+      "id": "RED-NET-004",
+      "category": "CONTENT",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": ["docs", "scripts"],
+      "patterns": [
+        "提升海外源可达性",
+        "走通后.*恢复",
+        "解决.*访问限制",
+        "访问限制.*(绕过|解除|突破)",
+        "解锁.*网络",
+        "恢复.*访问"
+      ],
+      "description": "把功能描述成「解决某类访问限制 / 提升海外源可达性 / 走通后 XX 即可恢复」会被判为规避手段叙事。应改为「源不可达 → 降级到国内源 + 离线快照 + 如实标注」的降级路径。",
+      "legal_source": "SkillHub 内容审核红线（功能合法 ≠ 文档合规）"
+    },
+    {
+      "id": "RED-AD-001",
+      "category": "CONTENT",
+      "severity": "high",
+      "redline": false,
+      "authority_type": "platform_policy",
+      "scan_targets": ["docs"],
+      "patterns": ["最好", "最佳", "第一", "唯一", "全网唯一", "顶级", "首选", "国家级", "最高级", "最强", "完美", "极致", "王牌", "销量第一", "领先全球", "No.1", "第一选择"],
+      "exclude_patterns": ["第一次使用", "第一时间", "第一步", "第一性原理", "排名第一的.*(学校|大学|机构)", "第一部分"],
+      "description": "广告法极限词（最好/第一/唯一/顶级等）会被内容审核拒绝或扣分。删除绝对化用语，用客观描述替代。",
+      "legal_source": "《广告法》第九条 / SkillHub 内容审核"
+    },
+    {
+      "id": "RED-FIN-001",
+      "category": "CONTENT",
+      "severity": "high",
+      "redline": false,
+      "authority_type": "platform_policy",
+      "scan_targets": ["docs", "scripts"],
+      "patterns": ["保证收益", "稳赚", "必涨", "荐股", "投资建议", "内部消息", "保本", "零风险", "涨停", "百分百盈利", "跟上车", "财富自由"],
+      "exclude_patterns": ["不构成投资建议", "仅供学习"],
+      "description": "金融敏感用语（荐股/保证收益/内部消息）需金融资质，触发内容审核。涉及投资内容必须加「不构成投资建议」免责声明，否则删除。",
+      "legal_source": "金融监管要求 / SkillHub 内容审核"
+    },
+    {
+      "id": "PRIV-PATH-001",
+      "category": "PRIVACY",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "best_practice",
+      "scan_targets": ["docs", "scripts"],
+      "patterns": [
+        "C:\\\\Users\\\\[A-Za-z0-9_]+",
+        "/Users/[A-Za-z0-9_]+/",
+        "/home/[A-Za-z0-9_]+/",
+        "file:///"
+      ],
+      "description": "文档/产物中泄漏了本机绝对路径（含用户名），公开发布会暴露隐私与仓库结构。替换为仓库内可运行、可验证的相对路径或模拟路径。",
+      "legal_source": "数据隐私最佳实践"
+    },
+    {
+      "id": "PRIV-NAME-001",
+      "category": "PRIVACY",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "best_practice",
+      "scan_targets": ["docs", "scripts"],
+      "patterns": ["[Ee]lisa", "陈彦廷", "Chen Yanting"],
+      "description": "文档中出现真实用户名/姓名。公开发布前脱敏为占位符（如 <your-name>）。",
+      "legal_source": "数据隐私最佳实践"
+    },
+    {
+      "id": "PRIV-MEAS-001",
+      "category": "PRIVACY",
+      "severity": "low",
+      "redline": false,
+      "authority_type": "best_practice",
+      "scan_targets": ["docs"],
+      "patterns": ["整仓 [0-9]+ 个文件", "[0-9]+ 个文件/.*MB", "[0-9]+ 万文件"],
+      "description": "真实量测值（如「整仓 52 个文件」「80925 文件/74MB」）一句话暴露仓库规模。替换为可验证的模拟值。",
+      "legal_source": "数据隐私最佳实践"
+    },
+    {
+      "id": "SEC-PERMISSION-001",
+      "category": "SPEC",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "platform_policy",
+      "scan_targets": ["docs"],
+      "patterns": ["subprocess", "os\\.system", "shutil\\.rmtree", "open\\(", "write_file", "save_file", "requests\\.get", "urllib"],
+      "description": "脚本含文件写入/子进程/网络调用，但 SKILL.md 未见权限声明（读哪些文件 / 写哪里 / 起什么子进程）。补一段权限声明可对症 SkillHub T 红线「过度授权」。",
+      "legal_source": "SkillHub TRACE 评测 T 维度（最小权限）"
+    },
+    {
+      "id": "INFO-PROXY-001",
+      "category": "CONTENT",
+      "severity": "low",
+      "level": "info",
+      "redline": false,
+      "authority_type": "platform_policy",
+      "scan_targets": ["docs", "scripts"],
+      "patterns": ["--proxy", "HTTPS_PROXY", "HTTP_PROXY", "出站代理", "代理服务器"],
+      "self_describing_markers": ["内网", "企业", "定位为"],
+      "description": "出站代理提及——请确认定位为「企业内网统一出网」场景，而非翻越网络管理限制。默认静音，用 --show-info 查看；确认无误后可 --learn 进白名单。"
+    }
+  ]
+}
