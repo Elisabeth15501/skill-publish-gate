@@ -90,6 +90,47 @@ def split_frontmatter(text: str):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  共享辅助：占位符判定 / Luhn 校验（降误报核心）
+# ═══════════════════════════════════════════════════════════════
+
+_PLACEHOLDER_RE = re.compile(
+    r"\*{2,}|x{4,}|\.{3,}|⋯+|<\s*[^>]+>|"
+    r"(示例|测试|example|占位|your[-_]|test|fake|dummy|xxxx|占位符)",
+    re.I,
+)
+_PLACEHOLDER_NUM_RE = re.compile(r"^\d{1,3}0{4,}$|^0{6,}$|^1[3-9]0{9}$|^1234567890{2,}$")
+
+
+def is_placeholder(text: str) -> bool:
+    """判断一段文本/数字是否像「示例 / 测试 / 占位」而非真实泄漏。
+    用于 PII / 凭据档，避免把文档里的示例值当真泄漏误杀。"""
+    t = (text or "").strip()
+    if not t:
+        return True
+    if _PLACEHOLDER_RE.search(t):
+        return True
+    if _PLACEHOLDER_NUM_RE.match(t):
+        return True
+    return False
+
+
+def _luhn_ok(num: str) -> bool:
+    """Luhn 校验（银行卡号真实性初筛，降误报）。"""
+    digits = [int(c) for c in num if c.isdigit()]
+    if len(digits) < 12:
+        return False
+    total = 0
+    parity = len(digits) % 2
+    for i, d in enumerate(digits):
+        if i % 2 == parity:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+# ═══════════════════════════════════════════════════════════════
 #  门禁检查器
 # ═══════════════════════════════════════════════════════════════
 
@@ -136,7 +177,7 @@ class SkillHubGate:
     # ── 通用辅助 ──
 
     def _add(self, category, severity, file, line, found, recommendation,
-             redline=False, authority_type="platform_policy", rule_id=""):
+             redline=False, authority_type="platform_policy", rule_id="", clause=""):
         self.issues.append({
             "rule_id": rule_id,
             "category": category,
@@ -147,6 +188,7 @@ class SkillHubGate:
             "recommendation": recommendation,
             "redline": redline,
             "authority_type": authority_type,
+            "clause": clause,
         })
 
     def _read(self, *parts):
@@ -547,6 +589,7 @@ class SkillHubGate:
                             continue
                         seen.add(key)
                         found = line.strip()[:80]
+                        clause = rule.get("clause", "")
                         rec = {
                             "rule_id": rule.get("id", ""),
                             "category": category,
@@ -557,6 +600,7 @@ class SkillHubGate:
                             "recommendation": rule.get("description", "请按 SkillHub 规范修改。"),
                             "redline": redline,
                             "authority_type": authority,
+                            "clause": clause,
                         }
                         if rule.get("level") == "info":
                             # INFO 级：默认静音，不计入 verdict；--show-info 才在报告展示
@@ -565,7 +609,7 @@ class SkillHubGate:
                             self._add(category, severity, fname, lineno, found,
                                       rule.get("description", "请按 SkillHub 规范修改。"),
                                       redline=redline, authority_type=authority,
-                                      rule_id=rule.get("id", ""))
+                                      rule_id=rule.get("id", ""), clause=clause)
 
     # ── 检查 8：凭据泄漏（SECRET，脱敏回显）──
 
@@ -610,6 +654,192 @@ class SkillHubGate:
                     authority_type="best_practice", rule_id="DEP-PIN-001",
                 )
 
+    # ── 检查 10：持久化篡改（SEC-PERSIST-001，critical，协议 5.1）──
+
+    PERSIST_TARGETS = re.compile(
+        r"(SOUL\.md|MEMORY\.md|IDENTITY\.md|USER\.md|\.workbuddy/MEMORY\.md)", re.I)
+    PERSIST_VERB = re.compile(
+        r"(写入|写回|写进|修改|编辑|更新|覆盖|追加|附加|append|write|edit|update|modify|overwrite)",
+        re.I)
+    PERSIST_WRITE_CALL = re.compile(
+        r"(open\s*\(|\.write_text\(|write_file|\.write\s*\(|save_file|\.write\b)", re.I)
+    PERSIST_META_MARKERS = [
+        "保护", "安全", "不应", "不得", "禁止", "不会", "不要", "切勿",
+        "防御", "防护", "检测", "防止", "避免", "不代表", "不修改", "不写入",
+        "请勿", "不应该", "本门禁", "红线",
+    ]
+
+    def check_persistent_tampering(self):
+        """SECURITY/critical（协议 5.1）：Skill 不得指示宿主**永久**篡改用户持久化
+        文件（SOUL.md / MEMORY.md / IDENTITY.md / USER.md）。这类改写越过会话、
+        持久影响宿主身份与记忆，属「篡改用户数据」红线。
+
+        双路检测，避免误伤门禁自身的说明文案：
+          (a) 文档正文（SKILL.md/README.md）里的命令式「写入/修改 X 文件」指令；
+          (b) 脚本里对持久化文件的实际写调用（open(...,'w') / write_text 等）。
+        防御性/自描述提及（含「不得/不修改/本门禁」等）跳过。"""
+        meta_pats = [re.compile(re.escape(m), re.I) for m in self.PERSIST_META_MARKERS]
+        # (a) 文档命令式指令
+        for fname in ["SKILL.md", "README.md"]:
+            for lineno, line in enumerate(self._read(fname), 1):
+                if not self.PERSIST_TARGETS.search(line):
+                    continue
+                if not self.PERSIST_VERB.search(line):
+                    continue
+                if any(mp.search(line) for mp in meta_pats):
+                    continue
+                self._add(
+                    "SECURITY", "critical", fname, lineno, line.strip()[:80],
+                    "检测到 Skill 指示宿主「写入/修改」持久化身份或记忆文件（SOUL.md/MEMORY.md 等）。"
+                    "这会越过会话永久改写用户数据，违反协议 5.1「不得篡改用户数据」红线。"
+                    "除非是用户明确授权的记忆写入且已在元语境声明，否则删除该指令。",
+                    redline=True, authority_type="platform_policy",
+                    rule_id="SEC-PERSIST-001",
+                    clause="第5.1条（不得对平台/其他Skill/用户系统实施安全风险操作，包括篡改、删除用户数据）",
+                )
+        # (b) 脚本实际写调用
+        sdir = os.path.join(self.target_dir, "scripts")
+        if os.path.isdir(sdir):
+            for f in sorted(os.listdir(sdir)):
+                if not f.endswith(".py"):
+                    continue
+                for lineno, line in enumerate(self._read("scripts", f), 1):
+                    if not self.PERSIST_TARGETS.search(line):
+                        continue
+                    if not self.PERSIST_WRITE_CALL.search(line):
+                        continue
+                    if any(mp.search(line) for mp in meta_pats):
+                        continue
+                    self._add(
+                        "SECURITY", "critical", f"scripts/{f}", lineno, line.strip()[:80],
+                        "脚本对持久化身份/记忆文件（SOUL.md/MEMORY.md 等）发起了实际写调用。"
+                        "这会越过会话永久改写用户数据，违反协议 5.1 红线。确认是否用户明确授权，"
+                        "否则改为会话内临时状态，不落盘持久化文件。",
+                        redline=True, authority_type="platform_policy",
+                        rule_id="SEC-PERSIST-001",
+                        clause="第5.1条（不得对平台/其他Skill/用户系统实施安全风险操作，包括篡改、删除用户数据）",
+                    )
+
+    # ── 检查 11：个人信息泄漏（PRIV-PII-001，high，协议 5.4/5.6）──
+
+    _ID_CARD_RE = re.compile(
+        r"\b[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])"
+        r"(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b")
+    _PHONE_RE = re.compile(r"\b1[3-9]\d{9}\b")
+    _BANK_RE = re.compile(r"\b\d{15,19}\b")
+    _PII_CTX_RE = re.compile(
+        r"(身份证|身份證|id\s*card|手机|电话|联系|手机号|phone|mobile|tel|微信|短信|"
+        r"银行卡|信用卡|bank\s*card|card|account|账号|卡号)", re.I)
+
+    @staticmethod
+    def _id_card_checksum_ok(s: str) -> bool:
+        """身份证 18 位校验位（GB 11643），降误报。"""
+        if len(s) != 18:
+            return False
+        try:
+            vals = [int(c) for c in s[:17]]
+        except ValueError:
+            return False
+        weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2]
+        check = sum(v * w for v, w in zip(vals, weights)) % 11
+        code = "10X98765432"[check]
+        return code == s[17].upper()
+
+    def check_pii_leak(self):
+        """PRIVACY/high（协议 5.4/5.6）：扫描身份证 / 手机号 / 银行卡号等个人信息。
+        银行卡走 Luhn 校验、身份证走校验位；命中值若为占位符（示例/测试）或处于
+        元语境（自描述/防护）则跳过，避免误伤文档示例。命中一律脱敏回显。
+        三类 PII 各自独立上报（同一行可能同时含多种）。"""
+        text_ext = (".md", ".py", ".json", ".yml", ".yaml", ".txt", ".sh", ".html", ".rst")
+        meta_pats = [re.compile(re.escape(m), re.I) for m in self.META_MARKERS]
+        clause = "第5.4条（保护用户个人信息）/第5.6条（数据安全与合规）"
+        for rel, _ap in self._iter_skill_files():
+            if not rel.lower().endswith(text_ext):
+                continue
+            for lineno, line in enumerate(self._read(rel), 1):
+                if any(mp.search(line) for mp in meta_pats):
+                    continue
+                # 身份证：严格正则 + 校验位（正则已足够特异，无需上下文）
+                idcard_val = None
+                m = self._ID_CARD_RE.search(line)
+                if m and self._id_card_checksum_ok(m.group(0)) and not is_placeholder(m.group(0)):
+                    idcard_val = m.group(0)
+                    self._add(
+                        "PRIVACY", "high", rel, lineno, "[REDACTED_PII] (身份证号)",
+                        "疑似身份证号泄漏——请脱敏为占位符（如 <your-id>），"
+                        "本门禁不回显原文。协议 5.4/5.6 要求保护用户个人信息。",
+                        redline=True, authority_type="platform_policy",
+                        rule_id="PRIV-PII-001", clause=clause,
+                    )
+                # 手机/银行卡：需上下文 + 校验，避免把订单号/时间戳当卡号
+                if self._PII_CTX_RE.search(line):
+                    mp = self._PHONE_RE.search(line)
+                    if mp and not is_placeholder(mp.group(0)):
+                        self._add(
+                            "PRIVACY", "high", rel, lineno, "[REDACTED_PII] (手机号)",
+                            "疑似手机号泄漏——请脱敏为占位符（如 <your-phone>），"
+                            "本门禁不回显原文。协议 5.4/5.6 要求保护用户个人信息。",
+                            redline=True, authority_type="platform_policy",
+                            rule_id="PRIV-PII-001", clause=clause,
+                        )
+                    for mm in self._BANK_RE.finditer(line):
+                        num = mm.group(0)
+                        if num == idcard_val:
+                            continue  # 跳过已被识别为身份证的 18 位数字
+                        if 15 <= len(num) <= 19 and _luhn_ok(num) and not is_placeholder(num):
+                            self._add(
+                                "PRIVACY", "high", rel, lineno, "[REDACTED_PII] (银行卡/账号)",
+                                "疑似银行卡/账号泄漏——请脱敏为占位符（如 <your-card>），"
+                                "本门禁不回显原文。协议 5.4/5.6 要求保护用户个人信息。",
+                                redline=True, authority_type="platform_policy",
+                                rule_id="PRIV-PII-001", clause=clause,
+                            )
+                            break  # 一行只报一次银行卡，避免刷屏
+
+    # ── 检查 12：开源协议合规（OSS-COPYLEFT-001 / OSS-STRIP-001，high，协议 2.3）──
+
+    _COPYLEFT_RE = re.compile(r"\b(AGPL|LGPL|GPL[- ]?v?[23]?)\b", re.I)
+    _STRIP_RE = re.compile(
+        r"(re\.sub\s*\([^)]*[Cc]opyright|remove.*[Ll]icense|replace.*[Ll]icense|"
+        r"strip.*[Cc]opyright|delete.*[Ll]icense|sed\s+.*[Cc]opyright|"
+        r"正则.*版权|清除.*版权|去除.*版权)", re.I)
+    _OSS_META_MARKERS = [
+        "不含", "避免", "非 GPL", "不是 GPL", "未使用", "不涉及", "不依赖",
+        "不适用", "不采用", "改为", "替换", "permissive",
+    ]
+
+    def check_license_compliance(self):
+        """SPEC/high（协议 2.3）：开源协议合规——
+        (a) 不得违规使用传染性协议（GPL/AGPL/LGPL）污染本 Skill 分发；
+        (b) 不得剥离/删除第三方代码的版权与许可声明。
+
+        只扫文档（SKILL.md/README/LICENSE），不扫 scripts——避免把门禁自身的
+        检测正则字面量（如 "GPL"/"版权"）误判为违规。"""
+        targets = ["SKILL.md", "README.md", "LICENSE"]
+        meta_pats = [re.compile(re.escape(m), re.I) for m in self._OSS_META_MARKERS]
+        for fname in targets:
+            for lineno, line in enumerate(self._read(fname), 1):
+                m = self._COPYLEFT_RE.search(line)
+                if m and not any(p.search(line) for p in meta_pats):
+                    self._add(
+                        "SPEC", "high", fname, lineno, line.strip()[:80],
+                        f"提及传染性开源协议 {m.group(0)}。若本 Skill 分发/打包了此类协议代码，"
+                        "会触发协议 2.3 的传染性义务（需开源衍生作品）。"
+                        "请确认合规，或替换为 permissive 许可组件（MIT/Apache-2.0 等）。",
+                        redline=True, authority_type="platform_policy",
+                        rule_id="OSS-COPYLEFT-001",
+                        clause="第2.3条（开源协议合规：保留许可声明、不违规使用传染性协议）",
+                    )
+                if self._STRIP_RE.search(line):
+                    self._add(
+                        "SPEC", "high", fname, lineno, line.strip()[:80],
+                        "检测到可能剥离/删除第三方版权或许可声明的代码。协议 2.3 要求保留第三方"
+                        "许可声明，不得剥离版权信息。确认该操作仅作用于自有产物，不含第三方代码。",
+                        redline=True, authority_type="platform_policy",
+                        rule_id="OSS-STRIP-001",
+                        clause="第2.3条（开源协议合规：不得剥离版权与许可信息）",
+                    )
+
     # ── 运行全部 ──
 
     def run_all(self, show_info=False):
@@ -630,6 +860,9 @@ class SkillHubGate:
         self.check_rules()
         self.check_credentials()
         self.check_dep_pinning()
+        self.check_persistent_tampering()
+        self.check_pii_leak()
+        self.check_license_compliance()
 
     # ── 判定 ──
 
@@ -702,6 +935,8 @@ class SkillHubGate:
                     )
                     lines.append(f"║   → {issue['found']}")
                     lines.append(f"║   建议：{issue['recommendation']}")
+                    if issue.get("clause"):
+                        lines.append(f"║   依据：{issue['clause']}")
                     if i < len(self.issues):
                         lines.append("║  ──────────────────────")
             if self.info_hits and self.show_info:
@@ -735,6 +970,15 @@ CREDENTIAL_PATTERNS = [
     (r"xox[baprs]-[A-Za-z0-9-]{10,}", "Slack Token"),
     (r"AIza[0-9A-Za-z_-]{35}", "Google API Key"),
     (r"ya29\.[0-9A-Za-z_-]{20,}", "Google OAuth Token"),
+    # ── 协议 5.1 / 5.4 扩容：钱包私钥 / SSH 凭证 / 连接串 / 高熵赋值 ──
+    (r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----",
+     "私钥块（RSA/EC/OpenSSH 等）"),
+    (r"(?:private[ _-]?key|私钥|助记词|mnemonic|seed[ _-]?phrase)\b[\s:=]{0,4}[\"']?[0-9a-fA-F]{64}[\"']?",
+     "EVM 风格 64 位十六进制私钥/助记词"),
+    (r"(?:postgres|postgresql|mysql|mongodb(?:\+srv)?|redis|ftp)://[^\s:@/]+:[^\s:@/]+@",
+     "数据库/FTP 连接串（含明文密码）"),
+    (r"(?:api[_-]?key|apikey|access[_-]?token|secret|client[_-]?secret|token|passwd|password|pwd)\s*[=:]\s*[\"'][A-Za-z0-9_\-+/]{24,}[\"']",
+     "高熵凭据明文赋值（api_key/secret/password 等）"),
 ]
 
 

@@ -1,7 +1,7 @@
 ---
 name: skillhub-gate
 slug: skillhub-gate
-version: 1.2.0
+version: 1.3.0
 displayName: SkillHub 发布前本地门禁
 summary: 发布到 SkillHub 前本地跑一遍，拦掉会被拒/卡死/下架的规范问题
 tags: [skillhub, 发布门禁, 合规预检, preflight, 上架检查]
@@ -12,7 +12,10 @@ description: >-
   displayName 缺失或不合法、YAML 静默解析失败）；② 封禁文件类型与超大产物包
   （.gitignore/.nojekyll/LICENSE/__pycache__/*.pyc/.github 会令正式发布报 400，
   文件数 >1000 会卡死）；③ 内容审核红线（网络规避敏感词、把功能描述成绕过网络
-  管理限制、绝对化宣传用语、需资质的金融类表述）与隐私泄漏、权限声明缺失。
+  管理限制、绝对化宣传用语、需资质的金融类表述）与隐私泄漏、权限声明缺失；
+  ④ 安全风险扫描（对照《腾讯 SkillHub 服务协议》第 5.1/5.4/5.6、第 2.3、第 6.2 条）：
+  持久化文件篡改、身份证/手机/银行卡等 PII 泄漏、Prompt 注入、恶意代码模式、
+  开源传染性协议与版权剥离。每条问题均标注协议条款出处。
   对标 skill-compliance-check 的结构（脚本 + 规则 JSON + 子命令），但聚焦
   SkillHub 平台规范。退出码 0=PASS / 2=NEEDS_FIX / 1=BLOCKED，可直接当 CI gate
   或 pre-publish hook 使用。

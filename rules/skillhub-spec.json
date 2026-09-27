@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "SkillHub 发布前本地门禁规范库。对照 skillhub-publish 技能已验证的发布卡点与 SkillHub 三线审核规则。",
   "spec": {
     "frontmatter": {
@@ -43,6 +43,7 @@
   "rules": [
     {
       "id": "RED-NET-001",
+      "clause": "第6.2条（禁止发布违法违规内容）/第2.2条（内容审核红线）",
       "category": "CONTENT",
       "severity": "critical",
       "redline": true,
@@ -55,6 +56,7 @@
     },
     {
       "id": "RED-NET-002",
+      "clause": "第6.2条（禁止发布违法违规内容）/第2.2条（内容审核红线）",
       "category": "CONTENT",
       "severity": "critical",
       "redline": true,
@@ -67,6 +69,7 @@
     },
     {
       "id": "RED-NET-003",
+      "clause": "第6.2条（禁止发布违法违规内容）/第2.2条（内容审核红线）",
       "category": "CONTENT",
       "severity": "high",
       "redline": true,
@@ -80,6 +83,7 @@
     },
     {
       "id": "RED-NET-004",
+      "clause": "第6.2条（禁止发布违法违规或规避网络管理限制的内容）",
       "category": "CONTENT",
       "severity": "high",
       "redline": true,
@@ -98,6 +102,7 @@
     },
     {
       "id": "RED-AD-001",
+      "clause": "第6.2条（禁止发布违法违规内容：广告法绝对化用语）",
       "category": "CONTENT",
       "severity": "high",
       "redline": false,
@@ -110,6 +115,7 @@
     },
     {
       "id": "RED-FIN-001",
+      "clause": "第6.2条（禁止发布违法违规内容：金融敏感表述需资质）",
       "category": "CONTENT",
       "severity": "high",
       "redline": false,
@@ -122,6 +128,7 @@
     },
     {
       "id": "PRIV-PATH-001",
+      "clause": "第5.4条（保护用户个人信息）/第5.6条（数据安全与合规）",
       "category": "PRIVACY",
       "severity": "medium",
       "redline": false,
@@ -138,17 +145,20 @@
     },
     {
       "id": "PRIV-NAME-001",
+      "clause": "第5.4条（保护用户个人信息）/第5.6条（数据安全与合规）",
       "category": "PRIVACY",
       "severity": "medium",
       "redline": false,
       "authority_type": "best_practice",
       "scan_targets": ["docs", "scripts"],
       "patterns": ["[Ee]lisa", "陈彦廷", "Chen Yanting"],
-      "description": "文档中出现真实用户名/姓名。公开发布前脱敏为占位符（如 <your-name>）。",
+      "exclude_patterns": ["Elisabeth15501"],
+      "description": "文档中出现真实用户名/姓名。公开发布前脱敏为占位符（如 <your-name>）。公开笔名 Elisabeth15501 已排除。",
       "legal_source": "数据隐私最佳实践"
     },
     {
       "id": "PRIV-MEAS-001",
+      "clause": "第5.6条（数据安全与合规）",
       "category": "PRIVACY",
       "severity": "low",
       "redline": false,
@@ -160,6 +170,7 @@
     },
     {
       "id": "SEC-PERMISSION-001",
+      "clause": "第5.4条（最小权限原则）/SkillHub TRACE 评测 T 维度",
       "category": "SPEC",
       "severity": "medium",
       "redline": false,
@@ -171,6 +182,7 @@
     },
     {
       "id": "INFO-PROXY-001",
+      "clause": "第6.2条（不得把功能描述成规避网络管理限制）",
       "category": "CONTENT",
       "severity": "low",
       "level": "info",
@@ -180,6 +192,49 @@
       "patterns": ["--proxy", "HTTPS_PROXY", "HTTP_PROXY", "出站代理", "代理服务器"],
       "self_describing_markers": ["内网", "企业", "定位为"],
       "description": "出站代理提及——请确认定位为「企业内网统一出网」场景，而非翻越网络管理限制。默认静音，用 --show-info 查看；确认无误后可 --learn 进白名单。"
+    },
+    {
+      "id": "SEC-MALWARE-001",
+      "category": "SECURITY",
+      "severity": "critical",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": ["scripts"],
+      "patterns": [
+        "eval\\s*\\(\\s*(base64|.*b64decode)",
+        "exec\\s*\\(\\s*(base64|.*b64decode)",
+        "base64\\.b64decode\\s*\\(.*\\)\\s*\\.\\s*(decode|decodebytes)",
+        "curl\\s+[^|]*\\|\\s*(ba)?sh",
+        "wget\\s+[^|]*\\|\\s*(ba)?sh",
+        "powershell\\s+.*-enc\\s+",
+        "IEX\\s*\\(",
+        "bash\\s+-i\\s+>&=\\s*/dev/tcp",
+        "nc\\s+-e\\s+/bin/(ba)?sh",
+        "os\\.system\\s*\\(\\s*[\"']rm\\s+-rf\\s+/",
+        "subprocess\\.[Pp]open\\s*\\([^)]*shell\\s*=\\s*True[^)]*\\|\\s*(ba)?sh"
+      ],
+      "self_describing_markers": ["防护", "防御", "检测", "安全", "扫描", "审计", "排查", "说明", "解释", "如何识别"],
+      "description": "命中疑似恶意代码模式（eval/exec 执行 base64、下载即执行、反向 shell、rm -rf / 等）。协议 5.1/5.4 禁止 Skill 携带恶意代码或实施安全风险。除非该模式是技能在描述/检测恶意代码本身（带防御性元语境），否则删除。",
+      "clause": "第5.1条（不得包含恶意代码）/第5.4条（安全风险扫描）"
+    },
+    {
+      "id": "SEC-PROMPT-001",
+      "category": "SECURITY",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": ["docs", "scripts"],
+      "patterns": [
+        "忽略.{0,6}(前面|以上|之前|上述).{0,4}(指令|提示|要求|规定|prompt|system)",
+        "ignore\\s+(previous|prior|above|all).{0,6}(instructions|prompt|rules)",
+        "disregard.{0,6}(instructions|prompt|rules)",
+        "忘记.{0,4}(指令|规则|system|规定)",
+        "越狱|jailbreak|JAILBREAK",
+        "DAN\\s*(模式|mode)?"
+      ],
+      "self_describing_markers": ["注入", "防护", "防御", "检测", "防止", "安全", "不代表", "不会", "避免", "说明", "解释", "如何防范"],
+      "description": "命中 Prompt 注入特征（要求忽略之前指令 / 越狱 / DAN 等）。协议 5.4 要求防止通过 Skill 实施安全风险；若 Skill 自身在诱导宿主模型越权或被注入，应删除。若技能在描述如何防御注入（带防护元语境），则不报。",
+      "clause": "第5.4条（防止通过 Skill 实施安全风险，包括 Prompt 注入）"
     }
   ]
 }
