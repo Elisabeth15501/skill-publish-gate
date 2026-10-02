@@ -1,3 +1,27 @@
+## [1.4.0] — 2026-10-03
+
+新增 `--platform clawhub` 模式，使本门禁可兼任 ClawHub 发布前本地门禁（复用 + 翻转 + 补齐）。
+
+**复用（clawhub 模式仍为 BLOCKER，是各平台安全扫描的本地映射）**
+- 恶意代码 / 持久化篡改 / Prompt 注入 / 凭据泄漏 / PII 泄漏 —— 三项 P0 安全检查不变。
+
+**翻转降级（SkillHub 专属口径，ClawHub 不认）**
+- 封禁文件检查在 clawhub 模式整体跳过（ClawHub 接受任意扩展名，`.gitignore`/`.github` 等不再拦）。
+- 翻墙词族 `RED-NET-001~004` 通过规则引擎新增的 `platform_downgrade` 钩子，在 clawhub 模式
+  由 BLOCKER（critical/high）降级为 WARN（ClawHub 不做关键词内容审核）。
+- `platform_downgrade` 钩子对所有规则通用：规则 JSON 加 `"platform_downgrade": {"clawhub": "medium"}` 即可按平台降级。
+
+**补齐 ClawHub 特有两检（当前门禁原本没有）**
+- `LICENSE-FIELD-001`：frontmatter 声明 `license:` 且非 `MIT-0` → BLOCKED（ClawHub 强制 MIT-0）；
+  声明为 `MIT-0` → WARN（建议移除该字段）。
+- `META-MISMATCH-001`：脚本调外部 CLI/子进程/网络但 frontmatter 未声明 `requires` → WARN
+  （ClawHub 标志性的声明-内容一致性审核）。
+
+**自反与回归**
+- 自反 WARN 属预期：本技能 frontmatter 含 `license: MIT-0`，clawhub 模式跑自身会触发
+  `LICENSE-FIELD-001` + `META-MISMATCH-001`（均 WARN，不阻断）；skillhub/github 两模式行为零变化。
+- 版本号 1.3.1 → 1.4.0（SKILL.md frontmatter + rules/skillhub-spec.json 同步）。
+
 ## [1.3.1] — 2026-10-02
 
 文档质量打磨（对照 CSDN《Skill 质量评估》8 维度框架的 D1/D2/D5 扣分点），无逻辑变更：

@@ -1,5 +1,5 @@
 {
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "SkillHub 发布前本地门禁规范库。对照 skillhub-publish 技能已验证的发布卡点与 SkillHub 三线审核规则。",
   "spec": {
     "frontmatter": {
@@ -53,7 +53,8 @@
       "patterns": ["翻墙", "翻牆", "科学上网", "科學上網", "梯子", "GFW", "突破网络", "突破防火"],
       "self_describing_markers": ["网络规避", "敏感词", "合规"],
       "description": "命中网络规避敏感词，将触发 SkillHub 内容合规审核拒绝（下架风险）。删除相关表述，不要在任何语言（文档/注释/输出字符串）中出现。",
-      "legal_source": "SkillHub 内容审核红线（三线并行：内容合规过滤）"
+      "legal_source": "SkillHub 内容审核红线（三线并行：内容合规过滤）",
+      "platform_downgrade": {"clawhub": "medium"}
     },
     {
       "id": "RED-NET-002",
@@ -66,7 +67,8 @@
       "patterns": ["shadowsocks", "v2ray", "clash", "trojan", "wireguard", "ssr", "vless", "vmess"],
       "self_describing_markers": ["网络规避", "敏感词", "合规", "代理工具"],
       "description": "命中代理工具同族词（shadowsocks/v2ray/clash/trojan 等），属网络规避敏感家族，会触发内容审核拒绝。除非技能本身合法且已获授权，否则删除。",
-      "legal_source": "SkillHub 内容审核红线"
+      "legal_source": "SkillHub 内容审核红线",
+      "platform_downgrade": {"clawhub": "medium"}
     },
     {
       "id": "RED-NET-003",
@@ -80,7 +82,8 @@
       "exclude_patterns": ["机场代码", "国际机场", "航空"],
       "self_describing_markers": ["网络规避", "敏感词", "合规"],
       "description": "「机场 / 节点订阅」在中文语境通常指代理服务，属敏感家族。确认无规避网络管理表述后再发布。",
-      "legal_source": "SkillHub 内容审核红线"
+      "legal_source": "SkillHub 内容审核红线",
+      "platform_downgrade": {"clawhub": "medium"}
     },
     {
       "id": "RED-NET-004",
@@ -99,7 +102,8 @@
         "恢复.*访问"
       ],
       "description": "把功能描述成「解决某类访问限制 / 提升海外源可达性 / 走通后 XX 即可恢复」会被判为规避手段叙事。应改为「源不可达 → 降级到国内源 + 离线快照 + 如实标注」的降级路径。",
-      "legal_source": "SkillHub 内容审核红线（功能合法 ≠ 文档合规）"
+      "legal_source": "SkillHub 内容审核红线（功能合法 ≠ 文档合规）",
+      "platform_downgrade": {"clawhub": "medium"}
     },
     {
       "id": "RED-AD-001",

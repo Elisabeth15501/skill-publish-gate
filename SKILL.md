@@ -1,7 +1,7 @@
 ---
 name: skillhub-gate
 slug: skillhub-gate
-version: 1.3.1
+version: 1.4.0
 displayName: SkillHub 发布前本地门禁
 summary: 发布到 SkillHub 前本地跑一遍，拦掉会被拒/卡死/下架的规范问题
 tags: [skillhub, 发布门禁, 合规预检, preflight, 上架检查]
@@ -17,8 +17,9 @@ description: >-
   持久化文件篡改、身份证/手机/银行卡等 PII 泄漏、Prompt 注入、恶意代码模式、
   开源传染性协议与版权剥离。每条问题均标注协议条款出处。
   对标 skill-compliance-check 的结构（脚本 + 规则 JSON + 子命令），但聚焦
-  SkillHub 平台规范。退出码 0=PASS / 2=NEEDS_FIX / 1=BLOCKED，可直接当 CI gate
-  或 pre-publish hook 使用。
+  SkillHub 平台规范。  也支持 `--platform clawhub` 模式（接受任意扩展名、网络规避敏感词族
+  降级为 WARN、补 MIT-0 授权与 requires 声明-内容一致性检查）。退出码 0=PASS /
+  2=NEEDS_FIX / 1=BLOCKED，可直接当 CI gate 或 pre-publish hook 使用。
 use_when:
   - 准备 `skillhub publish` 之前想先本地预检，避免被服务端拒或卡死
   - 检查 SKILL.md frontmatter 是否会被 SkillHub CLI 静默解析失败
@@ -59,12 +60,13 @@ BLOCKED 三档结论 + 退出码，能直接接 CI 或发布脚本。
 **适合用本门禁**：任何准备 `skillhub publish` 的本地 skill 目录（单技能 `check` / 批量 `dirs`）。
 
 **不适用 / 容易误用的场景**（请走别的通道，别硬套）：
-- 发 **ClawHub**：其审核基于「安全扫描（VirusTotal + 代码模式 + LLM）+ 强制 MIT-0 + 声明-内容一致性」，
-  不挑文件类型、也不做关键词内容审核，与本门禁的 SkillHub 口径不同。本门禁暂未内置
-  `--platform clawhub` 模式；需要的话应新增该模式（见 CHANGELOG / 评估文档），而非直接用 skillhub 模式。
+- 发 **ClawHub**：本门禁已内置 `--platform clawhub` 模式，但注意它的审核轴与 SkillHub 不同——
+  ClawHub 基于「安全扫描（VirusTotal + 代码模式 + LLM）+ 强制 MIT-0 + 声明-内容一致性」，
+  不挑文件类型、不做关键词内容审核。用 `clawhub` 模式（而非 `skillhub` 模式）跑：
+  `python scripts/gate.py check --dir <skill目录> --platform clawhub`
 - 已上架 skill 的**运行时监控**：本门禁只做发布前静态预检，不监控线上行为。
-- 纯**内容合规审计**（金融/广告法/隐私法律依据）：那是 `skill-compliance-check` 的职责，本门禁只管 SkillHub 平台规范。
-- 把门禁结论当**审核保证**：最终能否上架由 SkillHub 三线审核决定（见底部免责声明）。
+- 纯**内容合规审计**（金融/广告法/隐私法律依据）：那是 `skill-compliance-check` 的职责，本门禁只管平台规范。
+- 把门禁结论当**审核保证**：最终能否上架由各平台审核决定（见底部免责声明）。
 
 ## 检查项
 
@@ -86,6 +88,18 @@ BLOCKED 三档结论 + 退出码，能直接接 CI 或发布脚本。
 > 元语境豁免：当命中词出现在「否定 / 定义 / 清单 / 说明」语境（如「检测网络规避
 > 敏感词」）时视为自描述，不误报——所以合规/安全类技能罗列规则词不会被自己标红。
 
+### ClawHub 模式（`--platform clawhub`）专属检查
+
+| 类别 | 检查内容 | 触发后果 |
+|------|----------|----------|
+| 封禁文件 | clawhub 模式**跳过**封禁文件检查（接受任意扩展名，`.gitignore`/`.github` 等不再拦） | — |
+| 翻墙词族 | `RED-NET-001~004` 在 clawhub 模式**降级为 WARN**（ClawHub 不做关键词内容审核） | NEEDS_FIX |
+| 授权字段 | frontmatter 声明 `license:` 且非 `MIT-0` → BLOCKED；声明为 `MIT-0` → WARN（建议移除该字段） | BLOCKED / NEEDS_FIX |
+| 声明一致性 | 脚本调外部 CLI/子进程/网络但 frontmatter 未声明 `requires` → WARN（ClawHub 校验声明-内容一致性） | NEEDS_FIX |
+
+> 注：安全类检查（恶意代码 / 持久化篡改 / Prompt 注入 / 凭据 / PII）在三种平台模式
+> 下**均为 BLOCKER**，是各平台安全扫描的本地映射，不随平台降级。
+
 ## 执行逻辑
 
 触发后调用 `scripts/gate.py`：
@@ -103,6 +117,8 @@ python scripts/gate.py dirs --dir ~/.workbuddy/skills
 python scripts/gate.py check --dir <skill目录> --show-info
 # 强制扫全目录（默认若目录自身是 git 仓库则只扫 git 跟踪集，等价发布所见）
 python scripts/gate.py check --dir <skill目录> --all-files
+# ClawHub 预检（接受任意扩展名 + 翻墙词族降级 + MIT-0/requires 一致性检查）
+python scripts/gate.py check --dir <skill目录> --platform clawhub
 # 回灌：发布后审核发现的新坑写回 rules/feedback.json（防复发核心）
 python scripts/gate.py check --dir <skill目录> --learn '{"type":"blocker","pattern":"新危险词","reason":"平台审核打回：..."}'
 python scripts/gate.py check --dir <skill目录> --learn '{"type":"whitelist","pattern":"企业内网出站","reason":"已确认定位为内网场景"}'
@@ -117,7 +133,7 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 {
   "skill": "my-skill",
   "directory": "/abs/path/to/my-skill",
-  "spec_version": "1.3.1",
+  "spec_version": "1.4.0",
   "disclaimer": "本门禁仅做本地规范预检，不构成 SkillHub 审核保证……",
   "verdict": {
     "verdict": "PASS | NEEDS_FIX | BLOCKED",
@@ -160,7 +176,8 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 
 ## 发布前自检清单（给本技能自己）
 
-1. `python scripts/gate.py check --dir .` 应为 PASS；
+1. `python scripts/gate.py check --dir .`（默认 skillhub 模式）应为 BLOCKED（本仓库含 `.github`/`.gitignore`，属 SkillHub 发布需排除项，预期）；
+   `--platform github` 应为 PASS；`--platform clawhub` 预期 NEEDS_FIX（本技能 frontmatter 含 `license: MIT-0` 触发 `LICENSE-FIELD-001` WARN、脚本用 `subprocess` 未声明 `requires` 触发 `META-MISMATCH-001` WARN，均属预期，不阻断）。
 2. 用 `git archive HEAD` 导出干净副本再发布，别 `publish .` 仓库目录；
 3. 不写 `license:` 字段（避免踩 ClawHub 强制 MIT-0 的明文禁令，跨平台各出副本）。
 

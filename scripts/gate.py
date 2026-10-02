@@ -349,6 +349,9 @@ class SkillHubGate:
     # ── 检查 3：封禁文件类型 + 超大产物 ──
 
     def check_forbidden_files(self):
+        # ClawHub 接受任意扩展名、不挑文件类型（与 SkillHub 不同），封禁文件检查不适用
+        if self.platform == "clawhub":
+            return
         forbidden = set(self.spec.get("forbidden_files", []))
         globs = self.spec.get("forbidden_globs", [])
         artifact_dirs = set(self.spec.get("artifact_dirs", []))
@@ -550,6 +553,13 @@ class SkillHubGate:
             severity = rule.get("severity", "medium")
             redline = rule.get("redline", False)
             authority = rule.get("authority_type", "platform_policy")
+            # 每平台降级：ClawHub 不做关键词内容审核，把 SkillHub 专属红线（翻墙词族等）
+            # 的 BLOCKER 降级为 WARN，避免误伤正常历史/新闻类技能
+            down = rule.get("platform_downgrade", {})
+            if self.platform in down:
+                _ds = down[self.platform]
+                severity = "medium" if _ds in ("warn",) else _ds
+                redline = False
             exclude = [re.compile(e, re.I) for e in rule.get("exclude_patterns", [])]
             markers = [m for m in self.META_MARKERS]
             markers += rule.get("self_describing_markers", [])
@@ -840,6 +850,74 @@ class SkillHubGate:
                         clause="第2.3条（开源协议合规：不得剥离版权与许可信息）",
                     )
 
+    # ── 检查 13：ClawHub 发布前补充（LICENSE-FIELD / META-MISMATCH）──
+
+    def check_clawhub_compliance(self):
+        """仅 --platform clawhub 时运行。ClawHub 与 SkillHub 审核轴不同：
+        (a) ClawHub 强制 MIT-0 且不要求在 SKILL.md 写 license 字段；写了非 MIT-0 值
+            会审核打回（BLOCKER），写 MIT-0 也建议移除（WARN）。
+        (b) ClawHub 校验「声明-内容一致性」：脚本调用外部 CLI / 子进程 / 网络但
+            frontmatter 未声明 requires → WARN（安全扫描阶段可能打回）。"""
+        if self.platform != "clawhub":
+            return
+        if not hasattr(self, "_fm_data"):
+            return
+        data = self._fm_data
+        clause = "ClawHub 发布规范（强制 MIT-0 / 声明-内容一致性）"
+
+        # (a) license 字段
+        if "license" in data:
+            val = str(data.get("license")).strip()
+            if val.lower() == "mit-0":
+                self._add(
+                    "SPEC", "medium", "SKILL.md", 1,
+                    f"frontmatter 声明 license: {val}（ClawHub 无需此字段）",
+                    "ClawHub 强制 MIT-0 且不要求在 SKILL.md 写 license 字段；"
+                    "建议移除该字段，避免与平台默认授权语义冲突。",
+                    redline=False, authority_type="platform_policy",
+                    rule_id="LICENSE-FIELD-001", clause=clause,
+                )
+            else:
+                self._add(
+                    "SPEC", "critical", "SKILL.md", 1,
+                    f"frontmatter 声明 license: {val}（ClawHub 仅接受 MIT-0）",
+                    "ClawHub 强制 MIT-0 授权，非 MIT-0 会在安全/合规审核打回。"
+                    "移除 license 字段（平台默认 MIT-0），或确认已获特殊授权。",
+                    redline=True, authority_type="platform_policy",
+                    rule_id="LICENSE-FIELD-001", clause=clause,
+                )
+
+        # (b) requires 声明-内容一致性
+        if "requires" not in data:
+            sdir = os.path.join(self.target_dir, "scripts")
+            if os.path.isdir(sdir):
+                ext_pat = re.compile(
+                    r"(subprocess\.[A-Za-z]+\(|os\.system\(|shutil\.rmtree\(|"
+                    r"requests\.(get|post|put|delete)\(|"
+                    r"urllib\.(request|parse)\.urlopen\(|"
+                    r"socket\.(create_connection|socket)\(|"
+                    r"import\s+(?:subprocess|requests|urllib|socket)\b)", re.I)
+                hit_file = None
+                for f in sorted(os.listdir(sdir)):
+                    if not f.endswith(".py"):
+                        continue
+                    for line in self._read("scripts", f):
+                        if ext_pat.search(line):
+                            hit_file = f
+                            break
+                    if hit_file:
+                        break
+                if hit_file:
+                    self._add(
+                        "SPEC", "medium", "SKILL.md", 1,
+                        "脚本含外部 CLI/子进程/网络调用，但 frontmatter 未声明 requires",
+                        "ClawHub 审核校验「声明-内容一致性」：若 skill 依赖外部命令/子进程/网络，"
+                        "请在 frontmatter 添加 requires（如 requires: [\"python3\",\"requests\"]），"
+                        f"否则可能在安全扫描阶段被打回。命中文件：{hit_file}",
+                        redline=False, authority_type="platform_policy",
+                        rule_id="META-MISMATCH-001", clause=clause,
+                    )
+
     # ── 运行全部 ──
 
     def run_all(self, show_info=False):
@@ -863,6 +941,7 @@ class SkillHubGate:
         self.check_persistent_tampering()
         self.check_pii_leak()
         self.check_license_compliance()
+        self.check_clawhub_compliance()
 
     # ── 判定 ──
 
@@ -1126,8 +1205,8 @@ def main():
     p_check.add_argument("--dir", "-d", default=".", help="目标 skill 目录（默认当前目录）")
     p_check.add_argument("--format", "-f", choices=["text", "json"], default="text")
     p_check.add_argument("--output", "-o", default=None, help="输出到文件")
-    p_check.add_argument("--platform", "-p", choices=["skillhub", "github"], default="skillhub",
-                         help="目标平台：skillhub（默认，LICENSE 等是封禁 blocker）/ github（开源许可文件豁免）")
+    p_check.add_argument("--platform", "-p", choices=["skillhub", "github", "clawhub"], default="skillhub",
+                         help="目标平台：skillhub（默认，LICENSE 等是封禁 blocker）/ github（开源许可文件豁免）/ clawhub（接受任意扩展名，翻墙词族降级，补 MIT-0/requires 一致性检查）")
     p_check.add_argument("--show-info", action="store_true",
                          help="显示 INFO 级命中（出站代理等，默认静音，需人工确认定位）")
     p_check.add_argument("--all-files", action="store_true",
@@ -1140,7 +1219,7 @@ def main():
     p_dirs = sub.add_parser("dirs", help="批量检查多个 skill 并汇总")
     p_dirs.add_argument("--dir", "-d", default=".", help="含多个 skill 的父目录")
     p_dirs.add_argument("dirs", nargs="*", help="或直接指定目录列表")
-    p_dirs.add_argument("--platform", "-p", choices=["skillhub", "github"], default="skillhub",
+    p_dirs.add_argument("--platform", "-p", choices=["skillhub", "github", "clawhub"], default="skillhub",
                         help="目标平台（同 check --platform）")
     p_dirs.set_defaults(func=cmd_dirs)
 
