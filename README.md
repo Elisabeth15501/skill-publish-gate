@@ -42,6 +42,9 @@ python scripts/gate.py check --dir <skill目录>
 # 开源副本预检（github 平台：LICENSE 等许可文件豁免，仍查其余红线）
 python scripts/gate.py check --dir <skill目录> --platform github
 
+# ClawHub 预检（接受任意扩展名；翻墙词族降级为 WARN；补 MIT-0/requires 一致性检查）
+python scripts/gate.py check --dir <skill目录> --platform clawhub
+
 # 机器可读 / 落盘
 python scripts/gate.py check --dir <skill目录> --json
 python scripts/gate.py check --dir <skill目录> --output gate-report.txt
