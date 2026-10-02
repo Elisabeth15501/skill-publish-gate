@@ -1,7 +1,7 @@
 ---
 name: skillhub-gate
 slug: skillhub-gate
-version: 1.3.0
+version: 1.3.1
 displayName: SkillHub 发布前本地门禁
 summary: 发布到 SkillHub 前本地跑一遍，拦掉会被拒/卡死/下架的规范问题
 tags: [skillhub, 发布门禁, 合规预检, preflight, 上架检查]
@@ -54,6 +54,18 @@ disclaimer: 本门禁仅做本地规范预检，不构成 SkillHub 审核保证�
 本门禁把这些**发布前就该发现的问题**一次性本地跑出来，并给 PASS / NEEDS_FIX /
 BLOCKED 三档结论 + 退出码，能直接接 CI 或发布脚本。
 
+## 适用范围与边界
+
+**适合用本门禁**：任何准备 `skillhub publish` 的本地 skill 目录（单技能 `check` / 批量 `dirs`）。
+
+**不适用 / 容易误用的场景**（请走别的通道，别硬套）：
+- 发 **ClawHub**：其审核基于「安全扫描（VirusTotal + 代码模式 + LLM）+ 强制 MIT-0 + 声明-内容一致性」，
+  不挑文件类型、也不做关键词内容审核，与本门禁的 SkillHub 口径不同。本门禁暂未内置
+  `--platform clawhub` 模式；需要的话应新增该模式（见 CHANGELOG / 评估文档），而非直接用 skillhub 模式。
+- 已上架 skill 的**运行时监控**：本门禁只做发布前静态预检，不监控线上行为。
+- 纯**内容合规审计**（金融/广告法/隐私法律依据）：那是 `skill-compliance-check` 的职责，本门禁只管 SkillHub 平台规范。
+- 把门禁结论当**审核保证**：最终能否上架由 SkillHub 三线审核决定（见底部免责声明）。
+
 ## 检查项
 
 | 类别 | 检查内容 | 触发后果 |
@@ -97,11 +109,46 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"whitelist","p
 python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","pattern":"某弱建议表述","reason":"..."}'
 ```
 
+### JSON 输出结构（`--format json`）
+
+`--format json` 输出如下字段，可直接喂 CI / 后处理脚本：
+
+```json
+{
+  "skill": "my-skill",
+  "directory": "/abs/path/to/my-skill",
+  "spec_version": "1.3.1",
+  "disclaimer": "本门禁仅做本地规范预检，不构成 SkillHub 审核保证……",
+  "verdict": {
+    "verdict": "PASS | NEEDS_FIX | BLOCKED",
+    "exit_code": 0,
+    "total": 0, "blockers": 0, "warnings": 0, "redlines": 0,
+    "critical": 0, "high": 0, "medium": 0, "low": 0
+  },
+  "issues": [
+    {
+      "rule_id": "FM-001", "category": "SPEC", "severity": "critical",
+      "file": "SKILL.md", "line": 1, "found": "SKILL.md 不存在",
+      "recommendation": "目标目录必须包含 SKILL.md。",
+      "redline": true, "authority_type": "platform_policy",
+      "clause": "（可选；仅安全类问题回显协议条款出处）"
+    }
+  ],
+  "info_hits": [ "/* 同 issues 结构，仅 INFO 级；默认不计入 verdict，--show-info 才展示 */" ]
+}
+```
+
+- `--output <file>`：把报告写入该文件，**已存在则覆盖**；不指定则只打印到 stdout。
+- `issues` 与 `info_hits` 中每条含 `rule_id / category / severity / file / line / found /
+  recommendation / redline / authority_type / clause`，便于按规则聚合或定位。
+
 判定与退出码：
 
 - `BLOCKED`（exit 1）：命中 blocker（frontmatter 硬校验失败 / 封禁文件 / YAML 解析失败 / 内容红线 redline）→ **必须修**。
 - `NEEDS_FIX`（exit 2）：仅建议项（medium/low）→ 建议修，不阻断。
 - `PASS`（exit 0）：无问题 → 可发布。
+- **目录合法性**：`--dir` 指向不存在的路径、或不含 `SKILL.md` 的目录时，FRONTMATTER 检查
+  会报 `FM-001`（`critical` / BLOCKED，exit 1）——不会静默放行，也不会因缺文件崩溃。
 
 规则数据集中在 `rules/skillhub-spec.json`，新增/调整红线直接改 JSON 即可，不用动脚本。
 

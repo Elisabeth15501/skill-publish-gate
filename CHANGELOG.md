@@ -1,3 +1,17 @@
+## [1.3.1] — 2026-10-02
+
+文档质量打磨（对照 CSDN《Skill 质量评估》8 维度框架的 D1/D2/D5 扣分点），无逻辑变更：
+
+- **D1 元数据质量**：新增「适用范围与边界」一节，显式列出不适用场景
+  （发 ClawHub / 运行时监控 / 纯内容合规审计 / 当审核保证），让触发更精准、减少误用。
+- **D2 执行引导**：补充「目录合法性」说明——`--dir` 指向不存在或不含 `SKILL.md` 的目录时
+  报 `FM-001`（critical / BLOCKED，exit 1），不静默放行也不崩溃。
+- **D5 输入输出**：补充 `--format json` 的完整输出字段契约（verdict/issues/info_hits 结构）
+  与 `--output` 覆盖行为，便于接入 CI / 后处理。
+- 版本号 1.3.0 → 1.3.1（SKILL.md frontmatter + rules/skillhub-spec.json 同步）。
+- 修复：`--platform github` 模式下把 `.gitignore` 加入 `github_allowed_files` 豁免列表
+  （GitHub 开源仓库的标配文件，不应被门禁自身 dogfood 误拦；SkillHub 默认模式仍照常拦截）。
+
 ## [1.3.0] — 2026-09-26
 
 对照《腾讯 SkillHub 服务协议》（2026-07-20 生效）补齐 P0 安全风险扫描，每条问题标注协议条款出处：

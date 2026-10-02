@@ -1,5 +1,5 @@
 {
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "SkillHub 发布前本地门禁规范库。对照 skillhub-publish 技能已验证的发布卡点与 SkillHub 三线审核规则。",
   "spec": {
     "frontmatter": {
@@ -28,7 +28,8 @@
       "LICENSE",
       "LICENSE.md",
       "LICENSE.txt",
-      ".github"
+      ".github",
+      ".gitignore"
     ],
     "forbidden_globs": ["*.pyc", "*.pyo", "*.class", ".DS_Store", "*.egg-info"],
     "bundle": {
