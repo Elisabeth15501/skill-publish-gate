@@ -1,10 +1,14 @@
-# skillhub-gate · Skill 发布门禁（代码安全 + 平台规范）
+# skill-publish-gate · Skill 发布门禁（代码安全 + 平台规范）
 
 [![license: MIT-0](https://img.shields.io/badge/license-MIT--0-blue.svg)](LICENSE)
 
 一个 skill 要发出去之前，本来要跑两个工具：**代码安全**（凭据 / 注入 / PII / 恶意模式）
 和**平台规范**（frontmatter 硬校验 / 封禁文件 / 包体 / 声明一致性）。
 本门禁把两件事收成一条本地命令，并带上国内平台的内容措辞红线。
+
+> **更名**：本技能原名 `skillhub-gate`（v1.0.0 ~ v1.4.0 的历史完整保留），2026-10 更名为
+> `skill-publish-gate`。代码、CLI、退出码、规则库均不变，只是不再把某一家平台写进技能身份。
+> 旧名 `@skill:skillhub-gate` / `skillhub install skillhub-gate` 请按新名调用。
 
 > v2.0.0 起合并了 **ai-weekly-publish-gate**（国内平台措辞红线 + `--learn` 回灌闭环），
 > 词表与叙事正则全部落到 `rules/skillhub-spec.json`，不再依赖任何外部仓库。
@@ -28,7 +32,7 @@ cd ~/.workbuddy/skills
 git clone https://github.com/<你>/skillhub-gate.git
 
 # 方式 B：对话里一句话装（已连 GitHub 连接器时）
-# 帮我安装这个 skill：https://github.com/<你>/skillhub-gate
+# 帮我安装这个 skill：https://github.com/<你>/skill-publish-gate
 
 # 方式 C：从 GitHub 导入 ClawHub（clawhub.ai → import → 填仓库地址）
 ```
@@ -122,7 +126,7 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 
 | 工具 | 主场 | 与本门禁 |
 |---|---|---|
-| skillhub-gate（本） | 发布包门禁：包内容 + 结构 + 措辞 + 轻量安全 | — |
+| skill-publish-gate（本） | 发布包门禁：包内容 + 结构 + 措辞 + 轻量安全 | — |
 | skill-compliance-check | 国内监管合规（金融 / 广告法 / 隐私法律依据） | 本门禁管「能不能发」，它管「发上去合不合规」 |
 | CodeQL / Semgrep / domsec | 工业级源码漏洞分析（AST / 污点 / CVE） | 本门禁是发布前快检，深层审计走它们 |
 | gitleaks | 专用密钥扫描 | 本门禁只做包内凭据形态粗检，CI 里可再叠一个 |

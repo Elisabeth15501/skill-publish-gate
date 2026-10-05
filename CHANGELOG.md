@@ -4,6 +4,13 @@
 合并对象：**ai-weekly-publish-gate**（国内平台措辞红线 + `--learn` 回灌闭环）。
 原 ai-weekly-publish-gate 目录保留但改为重定向说明，能力不再依赖外部仓库的 `compliance_check.py`。
 
+**更名 skillhub-gate → skill-publish-gate**（同一次发布内完成，属 breaking）
+- 代码 / CLI / 退出码 / 规则库 / tag 序列（`v1.0.0`~`v1.4.0`）全部不变，仅是技能身份不再绑定单一平台。
+- 前称 `skillhub-gate` 保留在 frontmatter description、`use_when`、`trigger_keywords`、
+  README 迁移段与本报告历史条目中，便于从旧名检索回来。
+- 规则库文件名仍为 `rules/skillhub-spec.json`（改名会牵动脚本内路径常量与发布包结构），
+  其 `description` 已显式声明与新名对齐。
+
 **新增规则 RED-NET-005（措辞红线扩展，来自 2026-09-22 ai-weekly 文档措辞下架事故）**
 - 扩展词表：`防火墙` / `v2board` / `sspanel` / `clashx`（此前门禁只覆盖到 clash 主名与部分同族词）。
 - 违规叙事正则（此前完全缺失，或只覆盖字面量、漏变体）：

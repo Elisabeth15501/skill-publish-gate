@@ -1,13 +1,15 @@
 ---
-name: skillhub-gate
-slug: skillhub-gate
+name: skill-publish-gate
+slug: skill-publish-gate
 version: 2.0.0
 displayName: Skill 发布门禁（代码安全 + 平台规范）
 summary: 发布 Skill 前本地跑一遍，一次看全「代码安全」与「SkillHub/ClawHub 平台规范」，命中即阻断
-tags: [skill, 发布门禁, 合规预检, 代码安全, preflight, 上架检查, skillhub, clawhub]
+tags: [skill, 发布门禁, 合规预检, 代码安全, preflight, 上架检查, skillhub, clawhub, publish-gate]
 license: MIT-0
 description: >-
   Skill 发布门禁（preflight gate）——把「代码安全」与「平台规范」收成一道本地检查。
+  前称 skillhub-gate（v1.x  lineage 沿用于此），2026-10 起统一以 skill-publish-gate 为名；
+  按旧名 @skill:skillhub-gate 或搜索 skillhub-gate 引用的，均已迁移到本名，功能与 CLI 完全不变。
   两件事一起看：① 代码安全：疑似凭据泄漏、恶意执行模式、Prompt 注入、持久化文件篡改、身份证/手机/
   银行卡等 PII 泄漏、开源传染性协议与版权剥离；② 平台规范：frontmatter 硬校验（slug/version/
   displayName 缺失或非 SemVer、YAML 静默解析失败）、封禁文件与超大产物包（.gitignore/.nojekyll/
@@ -25,6 +27,7 @@ use_when:
   - 检查 SKILL.md frontmatter 是否会被平台 CLI 静默解析失败
   - 批量体检多个待发布 skill（本地技能库、CI 矩阵）
   - 想确认文档措辞是否踩了内容审核红线（网络规避词族、绝对化用语、金融敏感表述）
+  - 以前用过 skillhub-gate / ai-weekly-publish-gate，现在要找同一个门禁的新名字
 trigger_keywords:
   - skill 门禁
   - 发布前检查
@@ -32,9 +35,10 @@ trigger_keywords:
   - 上架前检查
   - 代码安全扫描
   - skill sec gate
-  - skillhub gate
+  - skillhub gate（历史名）
   - clawhub gate
   - publish gate
+  - skill publish gate
   - preflight
   - 发布门禁
 environment: local
@@ -43,7 +47,25 @@ dependencies: PyYAML（python -m pip install pyyaml；脚本缺失时自动尝�
 disclaimer: 本门禁仅做本地规范预检与静态安全扫描，不构成任何平台的上架保证。最终能否发布成功由各平台审核决定，责任由开发者自行承担。
 ---
 
-# Skill 发布门禁（skillhub-gate）
+# Skill 发布门禁（skill-publish-gate）
+
+## 0.1 更名说明：skillhub-gate → skill-publish-gate
+
+2026-10 由 `skillhub-gate` 更名为 `skill-publish-gate`。**不是新起点，是同一个东西改名**：
+代码、CLI、退出码、规则库、tag 序列全部不变，`v1.0.0`~`v1.4.0` 仍是同一条提交线的历史。
+
+| 旧 | 新 | 影响 |
+|---|---|---|
+| `@skill:skillhub-gate` | `@skill:skill-publish-gate` | 需改调用点（AI 侧引用名） |
+| 目录 `~/.workbuddy/skills/skillhub-gate` | `.../skill-publish-gate` | 路径本身，无影响 |
+| `skillhub install skillhub-gate` | `skillhub install skill-publish-gate` | 平台侧按 slug 安装时改 |
+| `python gate.py check ...` | 完全不变 | CLI 未动 |
+
+改名理由：老名字把「SkillHub」这一种平台写进了技能身份，而本门禁同时守 SkillHub 与 ClawHub
+两个平台，还带了代码安全一层——旧名会把能力边界讲窄。新名 `skill-publish-gate` 只说职责
+（发布门禁），平台agnostic，往后加平台不用再改名。
+
+> 若你在别处看到 `ai-weekly-publish-gate`：它早年已并进来，现为一个重定向壳，能力全部在本门禁内。
 
 ## 0. 这是什么：一道门禁，两件事
 
@@ -255,7 +277,7 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 
 | 工具 | 主场 | 与本门禁 |
 |---|---|---|
-| **skillhub-gate（本）** | 发布包门禁：包内容 + 结构 + 措辞 + 轻量安全 | — |
+| **skill-publish-gate（本）** | 发布包门禁：包内容 + 结构 + 措辞 + 轻量安全 | — |
 | `skill-compliance-check` | 国内监管合规（金融/广告法/隐私法律依据） | 本门禁管「能不能发」，它管「发上去合不合规」 |
 | CodeQL / Semgrep / domsec | 工业级源码漏洞分析（AST/污点/CVE） | 本门禁是发布前快检，深层审计走它们 |
 | gitleaks | 专用密钥泄漏扫描 | 本门禁只做包内凭据形态粗检，CI 里可再叠 gitleaks |

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SkillHub 发布前本地门禁 — skillhub-gate
+Skill 发布门禁（代码安全 + 平台规范）— skill-publish-gate
 ==========================================
 
 在 `skillhub publish` 之前，对目标 skill 目录做一次本地门禁检查，
@@ -1182,7 +1182,7 @@ def cmd_dirs(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="SkillHub 发布前本地门禁 — skillhub-gate",
+        description="Skill 发布门禁（代码安全 + 平台规范）— skill-publish-gate",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"

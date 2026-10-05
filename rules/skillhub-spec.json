@@ -1,6 +1,6 @@
 {
   "version": "2.0.0",
-  "description": "Skill 发布门禁规范库（skill 代码安全 + SkillHub/ClawHub 平台规范）。对照 skillhub-publish 技能已验证的发布卡点、SkillHub 三线审核规则，并合并 ai-weekly-publish-gate 的国内平台措辞红线词表。",
+  "description": "Skill 发布门禁规范库（skill 代码安全 + SkillHub/ClawHub 平台规范）。对照 skillhub-publish 技能已验证的发布卡点、SkillHub 三线审核规则，并合并 ai-weekly-publish-gate 的国内平台措辞红线词表。文件名沿用 skillhub-spec.json 的历史命名，内容已与新名 skill-publish-gate 对齐。",
   "spec": {
     "frontmatter": {
       "required": ["slug", "version", "displayName"],
