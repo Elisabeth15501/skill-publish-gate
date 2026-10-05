@@ -1,19 +1,22 @@
-# skillhub-gate · SkillHub 发布前本地门禁
+# skillhub-gate · Skill 发布门禁（代码安全 + 平台规范）
 
 [![license: MIT-0](https://img.shields.io/badge/license-MIT--0-blue.svg)](LICENSE)
 
-`skillhub publish` **之前**本地跑一遍，拦掉会被服务端拒绝、卡死或下架的规范问题。
-对标 [skill-compliance-check](https://github.com/) 的结构（脚本 + 规则 JSON + 子命令），但聚焦 SkillHub 平台规范。
+一个 skill 要发出去之前，本来要跑两个工具：**代码安全**（凭据 / 注入 / PII / 恶意模式）
+和**平台规范**（frontmatter 硬校验 / 封禁文件 / 包体 / 声明一致性）。
+本门禁把两件事收成一条本地命令，并带上国内平台的内容措辞红线。
 
-> 本项目以 **MIT-0** 在 GitHub 开源，可自由克隆 / 接 ClawHub import。门禁本身的价值，
-> 是给「准备发布到 SkillHub 的技能」做发布前预检——它解决的就是发布者最易踩的坑。
+> v2.0.0 起合并了 **ai-weekly-publish-gate**（国内平台措辞红线 + `--learn` 回灌闭环），
+> 词表与叙事正则全部落到 `rules/skillhub-spec.json`，不再依赖任何外部仓库。
+> 结构化对标 [skill-compliance-check](https://github.com/)（脚本 + 规则 JSON + 子命令）。
 
 ## 为什么需要它
 
 - `skillhub publish --dry-run` 只校验 frontmatter，**封禁文件类型要等正式发布才报 400**；
-- 仓库混入测试产物（`allure-results` / `.pytest_cache` / `data`）会让发布包上万 part，
-  服务端处理时卡死无输出；
-- 内容审核三线并行，文档里的网络规避敏感词、绝对化用语、金融敏感表述会拒或下架。
+- 仓库混入测试产物（`allure-results` / `.pytest_cache` / `data` / `.venv` / `node_modules`）
+  会让发布包上万 part，服务端处理时卡死无输出；
+- 内容审核三线并行，文档里的网络规避词族、绝对化用语、金融敏感表述会拒或下架；
+- 安全侧（凭据 / Prompt 注入 / 恶意执行模式 / PII）发布前通常没人查，等平台安全扫描打回时已下架。
 
 门禁把这些「服务端才暴露」的失败，提前到本地一条命令看出来。
 
@@ -42,34 +45,62 @@ python scripts/gate.py check --dir <skill目录>
 # 开源副本预检（github 平台：LICENSE 等许可文件豁免，仍查其余红线）
 python scripts/gate.py check --dir <skill目录> --platform github
 
-# ClawHub 预检（接受任意扩展名；翻墙词族降级为 WARN；补 MIT-0/requires 一致性检查）
+# ClawHub 预检（接受任意扩展名；措辞词族降级为 WARN；补 MIT-0/requires 一致性检查）
 python scripts/gate.py check --dir <skill目录> --platform clawhub
 
 # 机器可读 / 落盘
-python scripts/gate.py check --dir <skill目录> --json
+python scripts/gate.py check --dir <skill目录> --format json
 python scripts/gate.py check --dir <skill目录> --output gate-report.txt
 
 # 批量汇总（父目录下所有含 SKILL.md 的技能）
 python scripts/gate.py dirs --dir ~/.workbuddy/skills
+
+# 回灌：平台审核发现的新坑写回 rules/feedback.json
+python scripts/gate.py check --dir <skill目录> --learn '{"type":"blocker","pattern":"新危险词","reason":"平台审核打回：..."}'
 ```
 
 退出码：`0`=PASS，`2`=NEEDS_FIX，`1`=BLOCKED。可直接接 CI / pre-publish hook。
 
 ## 检查项一览
 
+### 代码安全（`SECURITY` / `PRIVACY`，跨三平台均为 BLOCKER）
+
 | 类别 | 内容 | 后果 |
 |------|------|------|
-| FRONTMATTER | 真 YAML 解析 / `slug`+`version`+`displayName` 必填 | BLOCKED |
-| 封禁文件 | `.gitignore`/`.nojekyll`/`__pycache__`/`*.pyc`/`.clawhubignore`/`.pytest_cache` 等（SkillHub）；`LICENSE` 等仅在 `--platform skillhub` 拦，`--platform github` 豁免 | BLOCKED |
+| 凭据泄漏 | 疑似 token/key（ghp_/sk-/AKIA/glpat-/xoxb-/AIza 等），命中脱敏回显 `[REDACTED_SECRET]` | BLOCKED |
+| 恶意执行 | base64 解码后 eval/exec、下载即执行、反向 shell、`rm -rf /` 等 | BLOCKED |
+| Prompt 注入 | 忽略之前指令 / 越狱 / DAN 等特征 | BLOCKED |
+| 持久化篡改 | 指示宿主永久改写 SOUL.md / MEMORY.md / IDENTITY.md / USER.md | BLOCKED |
+| 传染性协议 | copyleft 家族协议与版权剥离条款 | BLOCKED / NEEDS_FIX |
+| 隐私 / 权限 | 绝对路径泄漏、真实姓名、真实量测值、权限声明缺失 | NEEDS_FIX |
+
+### 平台规范（`SPEC`，随平台口径变化）
+
+| 类别 | 内容 | 后果 |
+|------|------|------|
+| FRONTMATTER | 真 YAML 解析 / `slug`+`version`+`displayName` 必填 / SemVer | BLOCKED |
+| 封禁文件 | `.gitignore`/`.nojekyll`/`__pycache__`/`*.pyc`/`.clawhubignore`/`.pytest_cache` 等；`LICENSE` 等仅在 `--platform skillhub` 拦，`--platform github` 豁免 | BLOCKED |
+| 发布产物卫生 | `.github_token` / `.workbuddy` / `.env` / `.venv` / `node_modules` 不得进包 | BLOCKED |
 | 包体 | 文件数 / 体积超阈值 | BLOCKED / NEEDS_FIX |
 | 版本一致性 | 多处 `version` 是否统一 | NEEDS_FIX |
 | 网络声明 | `network:none` 与脚本实际调用是否一致 | NEEDS_FIX |
-| 内容红线 | 网络规避敏感词、绕过网络管理叙事、绝对化用语、金融敏感表述 | BLOCKED / NEEDS_FIX |
-| 隐私 / 权限 | 绝对路径泄漏、权限声明缺失 | NEEDS_FIX |
-| 凭据泄漏 | 疑似 token/key（ghp_/sk-/AKIA/glpat-/xoxb-/AIza 等），命中脱敏回显 `[REDACTED_SECRET]` | BLOCKED |
+| 依赖钉版 | `requirements.txt` 未 pin 到 `==version` | NEEDS_FIX |
 | INFO 级 | 出站代理提及，默认静音，`--show-info` 才显示 | 不阻断 |
 
-规则集中在 `rules/skillhub-spec.json`，调整红线改 JSON 即可。
+### 内容措辞（`CONTENT`，对应平台审核红线）
+
+| 类别 | 内容 | 后果 |
+|------|------|------|
+| 网络规避词族 | `RED-NET-001~005`（中文词 + 代理工具同族词 + 机场/订阅 + 下架事故固化的扩展词表与叙事正则） | BLOCKED（clawhub 降级 WARN） |
+| 绝对化用语 | 广告法极限词（最好/第一/唯一/顶级…） | NEEDS_FIX |
+| 金融敏感表述 | 荐股 / 保证收益 / 内部消息… | NEEDS_FIX |
+| 出站代理提及 | INFO 级，需人工确认定位为企业内网出网 | 不阻断 |
+
+> 元语境豁免：命中词出现在「否定 / 定义 / 清单 / 说明」语境（如「检测网络规避敏感词」）时
+> 视为自描述，不误报——合规与安全类技能罗列规则词不会被自己标红。
+
+规则集中在 `rules/skillhub-spec.json`，调整红线改 JSON 即可（规则引擎直接把 `patterns`
+当正则编译，元语境豁免 / 平台降级 / 白名单 / 回灌都在脚本侧统一处理）。
 
 ## 回灌闭环（防复发）
 
@@ -86,6 +117,16 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 
 `learned_blockers`/`learned_warns` 下次扫描即作为增量规则，`whitelist` 命中即静音。
 私有白名单只静音确认过的误报，不污染默认规则库。
+
+## 与其他工具的分工
+
+| 工具 | 主场 | 与本门禁 |
+|---|---|---|
+| skillhub-gate（本） | 发布包门禁：包内容 + 结构 + 措辞 + 轻量安全 | — |
+| skill-compliance-check | 国内监管合规（金融 / 广告法 / 隐私法律依据） | 本门禁管「能不能发」，它管「发上去合不合规」 |
+| CodeQL / Semgrep / domsec | 工业级源码漏洞分析（AST / 污点 / CVE） | 本门禁是发布前快检，深层审计走它们 |
+| gitleaks | 专用密钥扫描 | 本门禁只做包内凭据形态粗检，CI 里可再叠一个 |
+| 平台安全扫描 | VirusTotal / LLM 评估 / 模型安全 | 本门禁是它们的本地预演 |
 
 ## 三条铁律（写进技能文档时牢记）
 
@@ -104,5 +145,6 @@ PR 欢迎。技能是给 Agent 的任务说明书，改动建议聚焦一处痛�
 
 ## 免责声明
 
-本门禁仅做本地规范预检，不构成 SkillHub 审核保证。最终能否上架由 SkillHub 三线审核
-决定，责任由开发者自行承担。
+本门禁仅做本地规范预检与静态安全扫描，**不构成任何平台的上架保证**。SkillHub 为三线并行审核
+（内容合规过滤 + 深度漏洞扫描 + 模型安全评估），ClawHub 为「安全扫描 + 强制 MIT-0 + 声明一致性」。
+最终能否发布由平台审核决定，责任由开发者自行承担。

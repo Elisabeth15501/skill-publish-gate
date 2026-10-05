@@ -1,3 +1,40 @@
+## [2.0.0] — 2026-10-06
+
+**定位变更**：从「SkillHub 发布前本地门禁」扩展为 **「Skill 发布门禁（代码安全 + 平台规范 + 内容措辞）」**。
+合并对象：**ai-weekly-publish-gate**（国内平台措辞红线 + `--learn` 回灌闭环）。
+原 ai-weekly-publish-gate 目录保留但改为重定向说明，能力不再依赖外部仓库的 `compliance_check.py`。
+
+**新增规则 RED-NET-005（措辞红线扩展，来自 2026-09-22 ai-weekly 文档措辞下架事故）**
+- 扩展词表：`防火墙` / `v2board` / `sspanel` / `clashx`（此前门禁只覆盖到 clash 主名与部分同族词）。
+- 违规叙事正则（此前完全缺失，或只覆盖字面量、漏变体）：
+  `绕过.{0,12}(限制|反爬|封禁|封锁|网络管理)`、`突破.{0,12}(封锁|限制)`、
+  `解决.{0,10}(访问|连接)不了`、`走通.{0,20}(即可|就能).{0,10}恢复`。
+- 与既有 `RED-NET-001~004` 做了去重交叉验证：`免翻墙`（001 裸词已覆盖）、`提升.{0,20}可达性`
+  与 `恢复.*访问`（004 已覆盖）**不重复收录**，避免同一行双报。
+- clawhub 模式同样通过 `platform_downgrade` 降级为 WARN，与 001~004 口径一致。
+- 逐条验证：8 条 pattern 全部实测命中（fixture 8/8），且不误伤合规自描述行。
+
+**发布产物卫生项并入 forbidden_files（规则 FORB-001，BLOCKED）**
+- 新增 `.github_token` / `.workbuddy` / `.env` / `.venv` / `node_modules` 五项——
+  之前只有 `.gitignore`、`.nojekyll`、`.pytest_cache` 等被拦，凭据文件与虚拟环境目录是盲区。
+- clawhub 模式随封禁文件检查一并跳过（ClawHub 不按文件类型挑）。
+
+**平台口径补齐**
+- `--platform github` 此前无文档示例，v2.0.0 加入 SKILL.md / README 用法节。
+- README / SKILL.md 的分工表显式化：与 `skill-compliance-check`（国内监管合规）、
+  CodeQL/Semgrep/domsec（工业级源码审计）、gitleaks（专用密钥）、平台安全扫描（VirusTotal/LLM 评估）
+  的边界写清，避免本门禁被当深层审计工具硬套。
+
+**自反与回归（已实测）**
+- 修掉一处新引入的自误伤：检查项表原写「GPL/AGPL/SAGPL」，被自家 `OSS-COPYLEFT-001`
+  判成携带传染性协议；改为「copyleft 家族」并注明协议名见规则库。
+- `--platform skillhub` 自家：BLOCKED（`.gitignore` + `LICENSE` 封禁，预期，与 v1.4.0 一致）；
+  `--platform github`：PASS；`--platform clawhub`：NEEDS_FIX（2 条预期 WARN）。
+  三平台行为与 v1.4.0 完全对齐，**无回归**。
+- fixture 验证：凭据文件 / 未钉版依赖 / 新措辞规则均如期 BLOCKED，无「写了不生效」的假规则。
+
+**版本号**：SKILL.md frontmatter `1.4.0` → `2.0.0`（含 `spec_version` 同步）。
+
 ## [1.4.0] — 2026-10-03
 
 新增 `--platform clawhub` 模式，使本门禁可兼任 ClawHub 发布前本地门禁（复用 + 翻转 + 补齐）。

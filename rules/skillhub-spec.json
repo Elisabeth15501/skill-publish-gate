@@ -1,6 +1,6 @@
 {
-  "version": "1.4.0",
-  "description": "SkillHub 发布前本地门禁规范库。对照 skillhub-publish 技能已验证的发布卡点与 SkillHub 三线审核规则。",
+  "version": "2.0.0",
+  "description": "Skill 发布门禁规范库（skill 代码安全 + SkillHub/ClawHub 平台规范）。对照 skillhub-publish 技能已验证的发布卡点、SkillHub 三线审核规则，并合并 ai-weekly-publish-gate 的国内平台措辞红线词表。",
   "spec": {
     "frontmatter": {
       "required": ["slug", "version", "displayName"],
@@ -22,7 +22,12 @@
       ".clawhubignore",
       ".pytest_cache",
       ".allure-results",
-      "allure-results"
+      "allure-results",
+      ".github_token",
+      ".workbuddy",
+      ".env",
+      ".venv",
+      "node_modules"
     ],
     "github_allowed_files": [
       "LICENSE",
@@ -240,6 +245,31 @@
       "self_describing_markers": ["注入", "防护", "防御", "检测", "防止", "安全", "不代表", "不会", "避免", "说明", "解释", "如何防范"],
       "description": "命中 Prompt 注入特征（要求忽略之前指令 / 越狱 / DAN 等）。协议 5.4 要求防止通过 Skill 实施安全风险；若 Skill 自身在诱导宿主模型越权或被注入，应删除。若技能在描述如何防御注入（带防护元语境），则不报。",
       "clause": "第5.4条（防止通过 Skill 实施安全风险，包括 Prompt 注入）"
+    },
+    {
+      "id": "RED-NET-005",
+      "clause": "第6.2条（禁止发布违法违规内容）/第2.2条（内容审核红线）",
+      "category": "CONTENT",
+      "severity": "critical",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": ["docs", "scripts"],
+      "origin": "ai-weekly-publish-gate —— 2026-09-22 ai-weekly 因文档措辞被判定内容审核不通过、整技能下架，该次事故固化的词表与叙事正则",
+      "patterns": [
+        "防火墙",
+        "v2board",
+        "sspanel",
+        "clashx",
+        "绕过[^。\\n]{0,12}(限制|反爬|封禁|封锁|网络管理)",
+        "突破[^。\\n]{0,12}(封锁|限制)",
+        "解决[^。\\n]{0,10}(访问|连接)不了",
+        "走通[^。\\n]{0,20}(即可|就能)[^。\\n]{0,10}恢复"
+      ],
+      "exclude_patterns": ["机场代码", "国际机场"],
+      "self_describing_markers": ["网络规避", "合规", "红线", "下架", "禁用"],
+      "description": "命中 ai-weekly 下架事故固化的网络规避词族扩展（防火墙 / v2board / sspanel / clashx）或「把功能描述成规避手段」的叙事（绕过限制 / 突破封锁 / 解决访问不了 / 走通即可恢复）。功能合法 ≠ 文档合规：一句「提升可达性」就足以被判违规。正确写法是降级路径——源不可达则降级到国内源 + 离线快照 + 如实标注，配代理只作企业内网合法出站并明写免责。",
+      "legal_source": "SkillHub 内容审核红线（源于 ai-weekly 2026-09-22 下架事故）",
+      "platform_downgrade": {"clawhub": "medium"}
     }
   ]
 }
