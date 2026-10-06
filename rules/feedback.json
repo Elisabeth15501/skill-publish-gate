@@ -1,5 +1,11 @@
 {
-  "whitelist": [],
+  "whitelist": [
+    {
+      "pattern": "极致（extreme-model",
+      "reason": "WorkBuddy 官方路由档位名（快速/均衡/极致），与客户端 UI 显示一致，非广告法绝对化用语；改动会与产品实际档位名不符",
+      "added": "2026-10-06T01:31:18"
+    }
+  ],
   "learned_blockers": [],
   "learned_warns": []
 }

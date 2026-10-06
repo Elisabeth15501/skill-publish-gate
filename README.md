@@ -10,6 +10,10 @@
 > `skill-publish-gate`。代码、CLI、退出码、规则库均不变，只是不再把某一家平台写进技能身份。
 > 旧名 `@skill:skillhub-gate` / `skillhub install skillhub-gate` 请按新名调用。
 
+> **v2.1.0 起新增缝接层**：SARIF 2.1.0 双向（`--format sarif` / `--sarif-in`）、统一指纹与基线
+> （`--baseline`）、外部配置（`--config` / `--strict`）、外部扫描器调用（`--deep-scan` /
+> `--offline`）、stdlib ast 危险调用精确行号、agentic 与 MCP 专有类目、`--platform ima`。
+
 > v2.0.0 起合并了 **ai-weekly-publish-gate**（国内平台措辞红线 + `--learn` 回灌闭环），
 > 词表与叙事正则全部落到 `rules/skillhub-spec.json`，不再依赖任何外部仓库。
 > 结构化对标 [skill-compliance-check](https://github.com/)（脚本 + 规则 JSON + 子命令）。
@@ -51,6 +55,26 @@ python scripts/gate.py check --dir <skill目录> --platform github
 
 # ClawHub 预检（接受任意扩展名；措辞词族降级为 WARN；补 MIT-0/requires 一致性检查）
 python scripts/gate.py check --dir <skill目录> --platform clawhub
+
+# ima 预检（七字段 / 零 _meta.json / ASCII 引号 / 纯 ASCII 文件名 / 触发词 ≤5）
+python scripts/gate.py check --dir <skill目录> --platform ima
+
+# 产出 SARIF 2.1.0（喂 GitHub Code Scanning）
+python scripts/gate.py check --dir <skill目录> --format sarif -o gate.sarif
+
+# 导入外部深度扫描器的 SARIF（finding 自动降一级后并入判定）
+python scripts/gate.py check --dir <skill目录> --sarif-in domsec.sarif
+
+# 直接调外部扫描器（不经 shell；失败不影响本地判定；{dir} = 目标目录）
+python scripts/gate.py check --dir <skill目录> \
+    --deep-scan "python3 ~/tools/scanner.py --format sarif {dir}"
+
+# 基线：抑制「确认过的误报」（指纹跨运行稳定，被抑制项降为 info 仍可追溯）
+python scripts/gate.py check --dir <skill目录> --write-baseline ./baseline.json
+python scripts/gate.py check --dir <skill目录> --baseline ./baseline.json
+
+# 外部配置：阈值 / 封禁文件追加 / 自定义规则（只许更严，--strict 可锁死）
+python scripts/gate.py check --dir <skill目录> --config ./gate.json
 
 # 机器可读 / 落盘
 python scripts/gate.py check --dir <skill目录> --format json
@@ -132,11 +156,32 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 | gitleaks | 专用密钥扫描 | 本门禁只做包内凭据形态粗检，CI 里可再叠一个 |
 | 平台安全扫描 | VirusTotal / LLM 评估 / 模型安全 | 本门禁是它们的本地预演 |
 
-## 三条铁律（写进技能文档时牢记）
+## 缝接层：谁做深度分析可以换，谁来判能不能发不换
+
+本门禁只判「这个 skill 能不能发布」，不重复造通用代码审计。深度那层通过三个入口接进来：
+
+| 入口 | 做什么 | 什么时候用 |
+|---|---|---|
+| `--format sarif` | 产出 SARIF 2.1.0 | 接 GitHub Code Scanning，或喂给别的工具 |
+| `--sarif-in FILE` | 吃任意外部 SARIF | 已有 domsec / SkillSpector / Codex Security 的报告 |
+| `--deep-scan CMD` | 直接调外部扫描器 | 想在一次门禁里串起深度扫描 |
+
+两条不变量：
+
+1. **外部 finding 一律降一级**（critical→high），且不带 redline。依据是 LLM 语义层实测精度约
+   87%——把它的 critical 直接当 BLOCKER 会被误报轰炸，用户随后只会把工具关掉。
+   已过验证层的工具可加 `--sarif-trusted` 恢复原始档位。
+2. **深度层失败绝不影响本地判定**。扫描器挂掉、超时、输出不合法，都只记一条日志。
+
+`--offline` 是硬开关：与 `--deep-scan` 互斥。理由是 Codex Security 必须登录、domsec 要把源码
+传给第三方——而这个门禁的存在理由之一就是「一个字节都不外传」，那就该做成开关而不是文档承诺。
+
+## 四条铁律（写进技能文档时牢记）
 
 1. **功能合法 ≠ 文档合规**：文档绝不出现法律含义明确的敏感词，更不把功能描述成「解决某类访问限制」。
 2. **`--proxy` 定位为企业内网统一出网**，明写「不提供也不支持任何规避网络管理措施的能力」。
 3. **降级而非绕行**：海外源不可达就降级到国内源 + 离线快照 + 如实标注。
+4. **默认零出网**：不带 `--deep-scan` 时不发起任何网络请求、不读任何环境变量、不需要任何密钥。
 
 ## 贡献
 

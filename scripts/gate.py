@@ -18,16 +18,25 @@ Skill 发布门禁（代码安全 + 平台规范）— skill-publish-gate
   - TRACE 评测 T 维度：最小权限、敏感信息保护、国内可用性、中文支持。
 
 退出码（可作 CI gate / pre-publish hook）：
-  0 = PASS          无任何 blocker / warning，可放心发布
-  2 = NEEDS_FIX     仅有建议项（medium/low），建议修复但不阻断
-  1 = BLOCKED       命中 blocker（critical/high / 封禁文件 / frontmatter 硬校验失败）
+    0 = PASS          无任何 blocker / warning，可放心发布
+    2 = NEEDS_FIX     仅有建议项（medium/low），建议修复但不阻断
+    1 = BLOCKED       命中 blocker（critical/high / 封禁文件 / frontmatter 硬校验失败）
                     —— 必须修复后才能发布，否则会被 SkillHub 拒绝或下架
+
+v2.1.0 新增（缝接层，全部可选、默认关闭）：
+    --format sarif        产出 SARIF 2.1.0（喂 GitHub Code Scanning）
+    --sarif-in FILE       导入外部扫描器（domsec/SkillSpector/Codex Security）的 SARIF
+    --baseline FILE       抑制「确认过的误报」（跨运行指纹）
+    --config FILE         外部配置：阈值 / 封禁文件 / 规则追加（只许更严）
+    --deep-scan CMD       调用外部深度扫描器（--offline 下禁用）
+    --platform ima        腾讯 ima 知识库包规范
 
 依赖：PyYAML（faithful YAML 解析）。
   脚本会先尝试 `import yaml`；缺失则自动 pip install 到当前解释器；
   若仍不可用，会作为 BLOCKER 报错退出，绝不静默通过。
 
-纯 Python 标准库 + PyYAML。无网络请求（自动安装 PyYAML 除外）。
+纯 Python 标准库 + PyYAML。默认路径零出网零密钥（仅 subprocess 跑 git ls-files）；
+只有显式 --deep-scan 才会执行外部命令。
 """
 
 from __future__ import annotations
@@ -36,15 +45,22 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ast_guard  # noqa: E402  —— 同目录模块，需先补 sys.path
+import config_loader  # noqa: E402
+import sarif_io  # noqa: E402
+
 GATE_DISCLAIMER = (
     "免责声明：本门禁仅做本地规范预检，不构成 SkillHub 审核保证。"
     "最终能否上架由 SkillHub 三线审核决定，责任由开发者自行承担。"
 )
+GATE_VERSION = "2.1.0"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -53,6 +69,11 @@ GATE_DISCLAIMER = (
 
 class YamlUnavailable(RuntimeError):
     pass
+
+
+class GateConfigError(RuntimeError):
+    """外部配置越权/非法。独立于 config_loader.ConfigError 是为了让 CLI 能
+    一律按「用户输入错误」处理，不必 import 内部模块的异常类型。"""
 
 
 def load_yaml_module():
@@ -140,7 +161,8 @@ BLOCKER_SEVERITIES = {"critical", "high"}
 
 
 class SkillHubGate:
-    def __init__(self, target_dir: str, use_git: bool = False, platform: str = "skillhub"):
+    def __init__(self, target_dir: str, use_git: bool = False, platform: str = "skillhub",
+                 config: dict = None, strict: bool = False):
         self.target_dir = os.path.abspath(target_dir)
         self.skill_name = os.path.basename(self.target_dir.rstrip("/\\"))
         self.issues: list[dict] = []
@@ -150,6 +172,7 @@ class SkillHubGate:
         # --git：默认扫 git 跟踪集（等价 CI / 发布所见）；非仓库则回退全扫
         self.use_git = use_git
         # --platform：skillhub（默认，LICENSE 等是封禁 blocker）/ github（开源许可文件豁免）
+        #            / clawhub / ima（各有专属口径，见 spec.platform_profiles）
         self.platform = platform
         self._git_files = self._git_tracked() if use_git else None
         # 回灌闭环（发布后审核发现写回 feedback.json）
@@ -157,6 +180,14 @@ class SkillHubGate:
         self.learned_blockers: list = []
         self.learned_warns: list = []
         self.show_info = False
+        # 外部配置生效摘要（供报告展示，让「我配的东西到底生效没」可核对）
+        self.config_applied: list = []
+        # --config / --rules：只许更严，越权配置直接抛 ConfigError
+        try:
+            self.config_applied, self.config_whitelist = config_loader.apply_config(
+                self.spec, self.rules, config or {}, strict=strict)
+        except config_loader.ConfigError as exc:
+            raise GateConfigError(str(exc)) from exc
 
     # ── 规则加载 ──
 
@@ -561,8 +592,13 @@ class SkillHubGate:
                 severity = "medium" if _ds in ("warn",) else _ds
                 redline = False
             exclude = [re.compile(e, re.I) for e in rule.get("exclude_patterns", [])]
-            markers = [m for m in self.META_MARKERS]
-            markers += rule.get("self_describing_markers", [])
+            # 元语境豁免分两档：默认叠加全局 META_MARKERS（内容红线用）；
+            # 但 agentic/MCP 类规则的攻击句式本身就是「不要 X」「无需确认」——
+            # 叠加全局的「不要」「无需」会把规则自己废掉，所以这类规则显式
+            # 声明 use_global_meta_markers=false，只用自己那份自描述词表。
+            markers = list(rule.get("self_describing_markers", []))
+            if rule.get("use_global_meta_markers", True):
+                markers = self.META_MARKERS + markers
             marker_pats = [re.compile(re.escape(m), re.I) for m in markers]
             scan_targets = rule.get("scan_targets", ["docs"])
             scan_docs = "docs" in scan_targets
@@ -590,6 +626,8 @@ class SkillHubGate:
                         if any(ep.search(line) for ep in exclude):
                             continue
                         if any(mp.search(line) for mp in marker_pats):
+                            continue
+                        if self._is_rule_catalog_row(line, rule.get("id", "")):
                             continue
                         # 私有白名单：只静音「确认过的误报」，绝不哑掉真问题
                         if any(w.search(line) for w in getattr(self, "whitelist_res", [])):
@@ -620,6 +658,30 @@ class SkillHubGate:
                                       rule.get("description", "请按 SkillHub 规范修改。"),
                                       redline=redline, authority_type=authority,
                                       rule_id=rule.get("id", ""), clause=clause)
+
+    # 档位词：文档里的规则表会写「BLOCKED / NEEDS_FIX」这类结论
+    _CATALOG_VERDICT_RE = re.compile(
+        r"\b(BLOCKED|NEEDS_FIX|PASS|CRITICAL|HIGH|MEDIUM|LOW|WARN|INFO)\b", re.I)
+
+    def _is_rule_catalog_row(self, line: str, rule_id: str) -> bool:
+        """判断这一行是不是「文档里的规则清单行」，是则跳过。
+
+        这类行的典型形态是文档里那张检查项表：
+            | MCP-PROMPT-001 | 工具描述投毒：「不要告诉用户…」 | BLOCKED |
+        它命中规则不是因为作者做了坏事，而是因为文档在**描述**规则。
+        没有这条豁免，任何写检查项清单的文档都会被自己的门禁拦下——
+        上一版就这么在检查项表里写下协议名，把自己判成了违规。
+
+        三个条件同时成立才豁免，口径刻意收窄：
+          1. 以 `|` 开头（markdown 表格行，不是正文）
+          2. 行内出现本规则自己的 ID
+          3. 行内出现档位词（说明这行在讲「这规则会报什么」）
+        只满足 1 或 2 不豁免——否则真违规只要排版成表格就能溜过去。
+        """
+        if not rule_id or not line.lstrip().startswith("|"):
+            return False
+        return bool(re.search(rf"\b{re.escape(rule_id)}\b", line)) and bool(
+            self._CATALOG_VERDICT_RE.search(line))
 
     # ── 检查 8：凭据泄漏（SECRET，脱敏回显）──
 
@@ -918,6 +980,116 @@ class SkillHubGate:
                         rule_id="META-MISMATCH-001", clause=clause,
                     )
 
+    # ── 检查 14：stdlib ast 危险调用薄兜底（C1′）──
+
+    def check_ast_dangerous_calls(self):
+        """SECURITY：eval/exec/os.system/shell=True/pickle 等危险调用的精确行号。
+
+        为什么要 ast 而不是正则：正则分不清「调用」与「注释/字符串」，也给不出
+        行号；而这一层只做最常见的危险调用兜底，通用漏洞挖掘交给外部深度扫描器
+        （--deep-scan / --sarif-in），不在这里重造。
+        """
+        result = ast_guard.scan_skill(self.target_dir)
+        for f in result["findings"]:
+            # 把 ast_guard 给的 why（「为什么危险」）并进 clause——安全类报告里
+            # 「怎么改」和「为什么危险」缺一不可，只带 recommendation 会丢掉后者
+            self._add(
+                "SECURITY", f["severity"], f["file"], f["line"], f["found"],
+                f["recommendation"],
+                redline=False, authority_type="static_analysis",
+                rule_id=f["rule_id"],
+                clause=f"代码安全：{f.get('why', '危险动态执行调用')}",
+            )
+        for note in result["notes"]:
+            # 解析失败不是发布阻断项，但它意味着「这块没被扫到」——必须让人知道
+            self.info_hits.append({
+                "rule_id": "AST-PARSE-001", "category": "SECURITY", "severity": "info",
+                "file": note["file"], "line": note["line"], "found": note["text"],
+                "recommendation": "该文件未被 ast 兜底覆盖（解析失败），请人工确认其安全性。",
+                "redline": False, "authority_type": "static_analysis", "clause": "",
+            })
+
+    # ── 检查 15：ima 包规范（仅 --platform ima）──
+
+    def check_ima_compliance(self):
+        """仅 --platform ima 时运行。ima 包口径与 SkillHub 不同的四件事：
+        (a) frontmatter 七字段齐全；(b) 包内不得含 _meta.json（由平台生成）；
+        (c) 字符串只用 ASCII 直引号（全角引号会被解析成字面量）；
+        (d) 文件名纯 ASCII + trigger_keywords ≤5 条。"""
+        if self.platform != "ima":
+            return
+        # platform_profiles 在 spec 子树里（与 frontmatter/bundle 同级）。
+        # 审计 B8：它曾被放在 JSON 顶层，而 _load_spec() 只返回 spec 子树，
+        # 于是这里恒为 None、ima 检查静默全跳过——不报错，只是没检查。
+        profile = self.spec.get("platform_profiles", {}).get("ima")
+        if not profile:
+            return
+        clause = f"ima 包规范（{profile.get('display_name', 'ima')}）"
+
+        # (a) 七字段
+        if hasattr(self, "_fm_data"):
+            for field in profile.get("frontmatter_required", []):
+                if self._fm_data.get(field) in (None, "", []):
+                    self._add(
+                        "SPEC", "critical", "SKILL.md", 1,
+                        f"缺少 ima 必填字段 `{field}`",
+                        f"在 frontmatter 添加 `{field}: <值>`。",
+                        redline=True, authority_type="platform_policy",
+                        rule_id="IMA-FM-001", clause=clause,
+                    )
+            # (d) 触发词条数
+            limit = profile.get("max_trigger_keywords", 5)
+            for key in ("trigger_keywords", "triggers", "use_when"):
+                val = self._fm_data.get(key)
+                if isinstance(val, list) and len(val) > limit:
+                    self._add(
+                        "SPEC", "medium", "SKILL.md", 1,
+                        f"`{key}` 有 {len(val)} 条，超过 ima 上限 {limit} 条",
+                        f"精简到 {limit} 条以内，只留最能区分意图的触发词。",
+                        authority_type="platform_policy",
+                        rule_id="IMA-TRIGGER-001", clause=clause,
+                    )
+
+        # 文件清单只取一次：_iter_skill_files() 是 os.walk 生成器，
+        # 放在外层循环里会每次重建，复杂度变成 O(禁用项数 × 全目录文件数)。
+        # 下面的 (b)(c)(d) 三段共用这一份清单。
+        all_files = list(self._iter_skill_files())
+
+        # (b) 平台生成物不得留在包内
+        banned = set(profile.get("forbidden_files", []))
+        for rel, _ap in all_files:
+            if os.path.basename(rel) in banned:
+                self._add(
+                    "SPEC", "critical", rel, 1,
+                    f"包内含平台生成物 `{os.path.basename(rel)}`",
+                    f"`{os.path.basename(rel)}` 由 ima 平台自行生成，留在包里会被判结构异常。",
+                    redline=True, authority_type="platform_policy",
+                    rule_id="IMA-FILE-001", clause=clause,
+                )
+
+        # (c)(d) ASCII 引号 + 纯 ASCII 文件名
+        for rel, _ap in all_files:
+            if profile.get("ascii_filename_only") and not rel.isascii():
+                self._add(
+                    "SPEC", "medium", rel, 1,
+                    f"文件名含非 ASCII 字符：`{rel}`",
+                    "ima 要求文件名纯 ASCII（跨平台与 URL 安全），重命名为英文。",
+                    authority_type="platform_policy",
+                    rule_id="IMA-NAME-001", clause=clause,
+                )
+            if not profile.get("ascii_quotes_only"):
+                continue
+            for lineno, line in enumerate(self._read(rel), 1):
+                bad = re.findall(r"[“”‘’]", line)
+                if bad:
+                    self._add(
+                        "SPEC", "medium", rel, lineno, line.strip()[:80],
+                        f"含全角引号 {' '.join(sorted(set(bad)))}（ima 只接受 ASCII 直引号）",
+                        "把 “ ” ‘ ’ 换成 \" ' ——全角引号在部分解析器里会被当字面量。",
+                        authority_type="platform_policy",
+                        rule_id="IMA-QUOTE-001", clause=clause,
+                    )
+
     # ── 运行全部 ──
 
     def run_all(self, show_info=False):
@@ -942,6 +1114,41 @@ class SkillHubGate:
         self.check_pii_leak()
         self.check_license_compliance()
         self.check_clawhub_compliance()
+        self.check_ast_dangerous_calls()
+        self.check_ima_compliance()
+
+    # ── 缝接层：L2 结果并入（v1.5.0）──
+
+    def merge_external(self, issues: list) -> dict:
+        """把外部扫描器的 issue 并入本门禁判定，返回统计摘要。
+
+        顺序即优先级：本门禁自己的结论在前，dedupe 时保留先到的。
+        L2 结果已在 sarif_io.from_sarif 里降过一级，这里不再二次降级。
+        """
+        before = len(self.issues)
+        self.issues.extend(issues)
+        kept, dropped = sarif_io.dedupe(self.issues)
+        self.issues = kept
+        return {"added": len(issues), "before": before,
+                "after": len(self.issues), "deduped": len(dropped)}
+
+    def suppress_baseline(self, path: str) -> int:
+        """套用基线文件：命中项降为 info，返回被抑制条数。
+
+        刻意不叫 apply_baseline：sarif_io 里已有一个 apply_baseline(issues, baseline)
+        返回拆分结果，同名不同签名会让 IDE 补全把两者混起来（clean code 审计 B1）。
+        「读文件」这步在这里，「怎么拆」在模块里。
+        """
+        baseline = sarif_io.load_baseline(path)
+        if not baseline:
+            return 0
+        self.issues, suppressed = sarif_io.apply_baseline(self.issues, baseline)
+        self.info_hits.extend(suppressed)
+        return len(suppressed)
+
+    def write_baseline(self, path: str) -> int:
+        """把当前全部 issue 的指纹写成基线，返回条数。"""
+        return sarif_io.save_baseline(path, self.issues, self.verdict()["verdict"])
 
     # ── 判定 ──
 
@@ -979,25 +1186,41 @@ class SkillHubGate:
             result = {
                 "skill": self.skill_name,
                 "directory": self.target_dir,
+                "platform": self.platform,
                 "spec_version": getattr(self, "spec_meta", {}).get("version", ""),
+                "config_applied": self.config_applied,
                 "disclaimer": GATE_DISCLAIMER,
                 "verdict": v,
                 "issues": self.issues,
                 "info_hits": self.info_hits,
             }
             txt = json.dumps(result, indent=2, ensure_ascii=False)
+        elif fmt == "sarif":
+            # SARIF 自带严重度与位置，不走 text 渲染；disclaimer 放 properties 里
+            doc = sarif_io.to_sarif(
+                self.issues,
+                tool_version=GATE_VERSION,
+                spec_version=getattr(self, "spec_meta", {}).get("version", ""),
+            )
+            doc["runs"][0]["properties"]["disclaimer"] = GATE_DISCLAIMER
+            doc["runs"][0]["properties"]["platform"] = self.platform
+            txt = json.dumps(doc, indent=2, ensure_ascii=False)
         else:
             lines = []
-            lines.append(f"╔══ SkillHub 发布前本地门禁 ══ {self.skill_name}")
+            lines.append(f"╔══ Skill 发布门禁 ══ {self.skill_name}")
             lines.append(f"║ 目录：{self.target_dir}")
+            lines.append(f"║ 平台：{self.platform}")
             icon = {"PASS": "✅", "NEEDS_FIX": "⚠️", "BLOCKED": "🛑"}[v["verdict"]]
             lines.append(f"║ 结论：{icon} {v['verdict']}  "
                          f"(blockers={v['blockers']}, warnings={v['warnings']}, "
                          f"redlines={v['redlines']})")
             lines.append(f"║ 问题：critical={v['critical']} high={v['high']} "
                          f"medium={v['medium']} low={v['low']}")
+            if self.config_applied:
+                lines.append(f"║ 外部配置生效 {len(self.config_applied)} 项："
+                             f"{'; '.join(self.config_applied)}")
             if v["verdict"] == "BLOCKED":
-                lines.append("║ → 必须修复 blocker 后才能 `skillhub publish`，否则被拒/下架。")
+                lines.append("║ → 必须修复 blocker 后才能发布，否则被平台拒绝/下架。")
             elif v["verdict"] == "NEEDS_FIX":
                 lines.append("║ → 仅有建议项，建议修复后发布。")
             lines.append("╠══ 问题列表 ══")
@@ -1008,9 +1231,10 @@ class SkillHubGate:
                     self.issues, key=lambda x: SEVERITY_ORDER.get(x["severity"], 99)
                 ), 1):
                     flag = " 🛑" if issue.get("redline") else ""
+                    src = " [L2]" if issue.get("source") == "l2" else ""
                     lines.append(
                         f"║ [{issue['severity'].upper():>8}] ({issue['category']}) "
-                        f"{issue['file']}:{issue['line']}{flag}"
+                        f"{issue['file']}:{issue['line']}{flag}{src}"
                     )
                     lines.append(f"║   → {issue['found']}")
                     lines.append(f"║   建议：{issue['recommendation']}")
@@ -1078,8 +1302,10 @@ def load_feedback():
 
 
 def save_feedback(data):
-    with open(FEEDBACK_PATH, "w", encoding="utf-8") as f:
+    # 末尾补换行：POSIX 文本文件惯例，也让 git diff 不再报 "No newline at end of file"
+    with open(FEEDBACK_PATH, "w", encoding="utf-8", newline="") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
 
 
 def learn(entry):
@@ -1130,6 +1356,94 @@ def _feedback_res(fb, key):
 #  CLI
 # ═══════════════════════════════════════════════════════════════
 
+def _strip_quotes(token: str) -> str:
+    """去掉 shlex(posix=False) 保留下来的一层引号。
+
+    只剥一层、且必须首尾配对，否则 "it's" 这种词会被削成 't'——这正是
+    posix=False 换来「引号内空格不被拆」时必须自己还回去的部分。
+    """
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+        return token[1:-1]
+    return token
+
+
+def run_deep_scan(command: str, target_dir: str, timeout: int = 600) -> dict:
+    """执行外部深度扫描器并解析其 SARIF 输出。
+
+    三条硬约束（v3 风险表）：
+    1. **不经 shell**：用 shlex.split 拆词后 list 传参，命令串里的 `;` `&&` 只会被
+       当普通参数，不会被 shell 解释——这是「仅白名单形式调用」的落点。
+    2. **失败不影响 L0**：非零退出 / 超时 / 输出不可解析，一律返回空结果 + note，
+       由调用方记为 INFO。深度扫描器挂掉不该让发布门禁变红。
+    3. **--offline 直接拒绝**：见 cmd_check 的互斥检查。
+
+    返回 {"issues": [...], "notes": [...]}；notes 是给人看的执行日志。"""
+    result = {"issues": [], "notes": []}
+    # Windows 上必须先把反斜杠转成正斜杠再拆词：shlex 默认按 POSIX 语义把
+    # `\` 当转义符，于是形如 "C:" + 反斜杠 + "Users" + 反斜杠 + "x.py" 的路径
+    # 会被吃成一串没有分隔符的乱码（实测踩过：--deep-scan 静默不生效）。
+    # Windows 的 CreateProcess 接受正斜杠路径，所以这样换是安全的。
+    raw = command.replace("\\", "/") if os.name == "nt" else command
+    try:
+        # posix=False：保留引号原样，让 shlex 按 Windows 习惯把 "C:/Program Files/x.exe"
+        # 整体当一个词。默认 posix=True 会把引号吃掉，再遇上路径里的空格就拆成两个词——
+        # 路径含空格时静默失效（实测踩过：AppData\Local\Temp 这类路径必中）。
+        argv = shlex.split(raw, posix=(os.name != "nt"))
+    except ValueError as exc:
+        result["notes"].append(f"--deep-scan 命令无法解析：{exc}")
+        return result
+    argv = [_strip_quotes(a) for a in argv]
+    if not argv:
+        result["notes"].append("--deep-scan 为空命令，已跳过")
+        return result
+    argv = [a.replace("{dir}", target_dir) for a in argv]
+    if "{dir}" in " ".join(argv):
+        result["notes"].append("--deep-scan 命令需含 {dir} 占位符（被替换为目标目录）")
+        return result
+    try:
+        proc = subprocess.run(argv, cwd=target_dir, capture_output=True,
+                              text=True, timeout=timeout, check=False)
+    except FileNotFoundError:
+        result["notes"].append(f"--deep-scan 找不到可执行文件：{argv[0]}")
+        return result
+    except subprocess.TimeoutExpired:
+        result["notes"].append(f"--deep-scan 超时（>{timeout}s）已中止")
+        return result
+    except OSError as exc:
+        result["notes"].append(f"--deep-scan 执行失败：{exc}")
+        return result
+    if proc.returncode != 0:
+        result["notes"].append(
+            f"--deep-scan 退出码 {proc.returncode}，其结果未纳入判定"
+            f"（stderr: {(proc.stderr or '').strip()[:120]}）")
+    stdout = (proc.stdout or "").strip()
+    if not stdout:
+        result["notes"].append("--deep-scan 无 stdout 输出，无 SARIF 可导入")
+        return result
+    try:
+        doc = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        result["notes"].append(f"--deep-scan 输出不是合法 JSON（{exc}），已忽略")
+        return result
+    result["issues"] = sarif_io.from_sarif(doc, trusted=False, source="l2")
+    result["notes"].append(f"--deep-scan 导入 {len(result['issues'])} 条 finding（已降一级）")
+    return result
+
+
+def load_external_sarif(path: str, trusted: bool) -> list:
+    """读一份外部 SARIF 文件并转成 gate issue。文件坏掉时返回空并说明原因，
+    绝不抛异常——外部工具的输出问题不该让门禁崩。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GateConfigError(f"--sarif-in 读取失败：{path}（{exc}）") from exc
+    if not sarif_io.looks_like_sarif(doc):
+        raise GateConfigError(
+            f"--sarif-in 文件不是 SARIF 2.1.0（缺 version/runs）：{path}")
+    return sarif_io.from_sarif(doc, trusted=trusted, source="l2")
+
+
 def cmd_check(args):
     # 回灌模式：写完即退出（不扫描）
     if args.learn is not None:
@@ -1144,11 +1458,64 @@ def cmd_check(args):
             print(f"❌ {exc}")
             sys.exit(2)
         sys.exit(0)
-    # 默认 git 跟踪集（等价发布所见）；--all-files 强制全扫
-    use_git = not args.all_files
-    gate = SkillHubGate(args.dir, use_git=use_git, platform=args.platform)
+
+    config = config_loader.load_config(args.config) if args.config else {}
+    platform = args.platform or config.get("platform") or "skillhub"
+
+    if args.offline and args.deep_scan:
+        print("❌ --offline 与 --deep-scan 互斥：离线模式下禁止执行外部命令"
+              "（这是防源码外传的硬开关，不是建议）")
+        sys.exit(2)
+
+    try:
+        gate = SkillHubGate(
+            args.dir, use_git=not args.all_files, platform=platform,
+            config=config, strict=args.strict,
+        )
+    except GateConfigError as exc:
+        print(f"❌ 配置错误：{exc}")
+        sys.exit(2)
+
+    # 外部白名单（--config whitelist_append）并入回灌白名单
+    for pattern in getattr(gate, "config_whitelist", []):
+        gate.whitelist_res.append(re.compile(pattern, re.I))
+
     gate.run_all(show_info=args.show_info)
+
+    # ── 缝接层：L2 结果并入（每一步失败都不影响 L0 判定）──
+    notes = []
+    if args.sarif_in:
+        try:
+            l2 = load_external_sarif(args.sarif_in, trusted=args.sarif_trusted)
+        except GateConfigError as exc:
+            # 走 stderr：stdout 要留给报告本体，json/sarif 得能被 `| jq` 直接消费
+            print(f"⚠️ {exc}（已忽略，不影响 L0 判定）", file=sys.stderr)
+            l2 = []
+        if l2:
+            stats = gate.merge_external(l2)
+            notes.append(f"SARIF 导入 {stats['added']} 条（去重 {stats['deduped']} 条）")
+    if args.deep_scan:
+        deep = run_deep_scan(args.deep_scan, gate.target_dir)
+        if deep["issues"]:
+            gate.merge_external(deep["issues"])
+        notes += deep["notes"]
+    if args.baseline:
+        n = gate.suppress_baseline(args.baseline)
+        notes.append(f"基线抑制 {n} 条" if n else "基线为空或无命中")
+
+    if args.write_baseline:
+        n = gate.write_baseline(args.write_baseline)
+        notes.append(f"已写入基线 {n} 条指纹 → {args.write_baseline}")
+
     out = gate.report(fmt=args.format, output_path=args.output)
+    if notes and args.format == "text":
+        print("── 缝接层 ──")
+        for n in notes:
+            print(f"  · {n}")
+    elif notes:
+        # json/sarif 消费方要能直接 pipe，缝接层日志改走 stderr
+        for n in notes:
+            print(f"· {n}", file=sys.stderr)
     print(out)
     sys.exit(gate.verdict()["exit_code"])
 
@@ -1192,6 +1559,12 @@ def main():
             "  python3 gate.py check --dir ./my-skill --show-info   # 显示 INFO 级（出站代理）\n"
             "  python3 gate.py check --dir ./my-skill --all-files  # 强制全扫（不依赖 git）\n"
             "  python3 gate.py check --dir ./my-skill --platform github  # 开源副本预检（LICENSE 豁免）\n"
+            "  python3 gate.py check --dir ./my-skill --platform ima     # 腾讯 ima 知识库包规范\n"
+            "  python3 gate.py check --dir ./my-skill --format sarif -o gate.sarif\n"
+            "  python3 gate.py check --dir ./my-skill --sarif-in domsec.sarif  # 导入外部深度结果\n"
+            "  python3 gate.py check --dir ./my-skill --config ./gate.json --strict\n"
+            "  python3 gate.py check --dir ./my-skill --baseline ./baseline.json\n"
+            "  python3 gate.py check --dir ./my-skill --offline --deep-scan 'x {dir}'  # 会报错\n"
             "  python3 gate.py check --dir ./my-skill --learn \\\n"
             "      '{\"type\":\"blocker\",\"pattern\":\"新危险词\",\"reason\":\"平台审核打回：...\"}'\n"
             "  python3 gate.py dirs --dir ~/.workbuddy/skills\n\n"
@@ -1203,24 +1576,51 @@ def main():
 
     p_check = sub.add_parser("check", help="对单个 skill 做门禁检查（默认）")
     p_check.add_argument("--dir", "-d", default=".", help="目标 skill 目录（默认当前目录）")
-    p_check.add_argument("--format", "-f", choices=["text", "json"], default="text")
+    p_check.add_argument("--format", "-f", choices=["text", "json", "sarif"], default="text",
+                         help="报告格式；sarif 为 SARIF 2.1.0（喂 GitHub Code Scanning）")
     p_check.add_argument("--output", "-o", default=None, help="输出到文件")
-    p_check.add_argument("--platform", "-p", choices=["skillhub", "github", "clawhub"], default="skillhub",
-                         help="目标平台：skillhub（默认，LICENSE 等是封禁 blocker）/ github（开源许可文件豁免）/ clawhub（接受任意扩展名，翻墙词族降级，补 MIT-0/requires 一致性检查）")
+    p_check.add_argument("--platform", "-p", default=None,
+                         help="目标平台：skillhub（默认，LICENSE 等是封禁 blocker）/ github（开源许可文件豁免）"
+                              "/ clawhub（接受任意扩展名，网络规避词族降级，补 MIT-0/requires 一致性检查）"
+                              "/ ima（腾讯 ima 知识库包规范）。缺省时读 --config 的 platform，再默认 skillhub")
     p_check.add_argument("--show-info", action="store_true",
-                         help="显示 INFO 级命中（出站代理等，默认静音，需人工确认定位）")
+                         help="显示 INFO 级命中（出站代理、MCP 未声明等，默认静音，需人工确认定位）")
     p_check.add_argument("--all-files", action="store_true",
                          help="强制扫全目录（默认若目录是 git 仓库则只扫 git 跟踪集）")
     p_check.add_argument("--learn", default=None,
                          help="回灌：传入 JSON {\"type\":\"blocker|whitelist|warn\","
                               "\"pattern\":...,\"reason\":...}，写回 rules/feedback.json 后退出")
+    # ── v1.5.0 缝接层 ──
+    p_check.add_argument("--config", default=None,
+                         help="外部配置文件（.json/.yaml）：阈值、封禁文件追加、规则追加。"
+                              "只许更严：阈值只能调低、红线规则不可被覆盖（--strict 全锁）")
+    p_check.add_argument("--strict", action="store_true",
+                         help="锁定内置规则库：配置里的 spec/封禁文件覆盖一律报错（仅允许追加类）")
+    p_check.add_argument("--sarif-in", default=None,
+                         help="导入外部扫描器的 SARIF 2.1.0（domsec/SkillSpector/Codex Security），"
+                              "finding 一律降一级后并入判定")
+    p_check.add_argument("--sarif-trusted", action="store_true",
+                         help="声明 --sarif-in 的 finding 已过验证层，不做降级（谨慎使用）")
+    p_check.add_argument("--baseline", default=None,
+                         help="基线文件：抑制其中列出的指纹（确认过的误报）")
+    p_check.add_argument("--write-baseline", default=None,
+                         help="把本次全部 issue 的指纹写入基线文件（确认误报后再用）")
+    p_check.add_argument("--deep-scan", default=None,
+                         help="调用外部深度扫描器并导入其 SARIF 输出，形如 "
+                              "'python3 ~/tools/scanner.py --format sarif {dir}'。"
+                              "{dir} 会被替换为目标目录；不经 shell；失败不影响 L0 判定。"
+                              "路径含空格时必须加引号（Windows 尤其："
+                              "\"C:/Program Files/x.exe\" scanner.py {dir}）")
+    p_check.add_argument("--offline", action="store_true",
+                         help="硬开关：禁止 --deep-scan（防 CI 配置手滑把源码传给外部服务）")
     p_check.set_defaults(func=cmd_check)
 
     p_dirs = sub.add_parser("dirs", help="批量检查多个 skill 并汇总")
     p_dirs.add_argument("--dir", "-d", default=".", help="含多个 skill 的父目录")
     p_dirs.add_argument("dirs", nargs="*", help="或直接指定目录列表")
-    p_dirs.add_argument("--platform", "-p", choices=["skillhub", "github", "clawhub"], default="skillhub",
-                        help="目标平台（同 check --platform）")
+    p_dirs.add_argument("--platform", "-p", default="github",
+                        help="目标平台（同 check --platform；批量体检默认 github，"
+                             "因为被检目录通常含 LICENSE/.gitignore 等开源仓库文件")
     p_dirs.set_defaults(func=cmd_dirs)
 
     args = parser.parse_args()

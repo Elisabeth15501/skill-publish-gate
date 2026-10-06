@@ -1,10 +1,19 @@
 {
-  "version": "2.0.0",
-  "description": "Skill 发布门禁规范库（skill 代码安全 + SkillHub/ClawHub 平台规范）。对照 skillhub-publish 技能已验证的发布卡点、SkillHub 三线审核规则，并合并 ai-weekly-publish-gate 的国内平台措辞红线词表。文件名沿用 skillhub-spec.json 的历史命名，内容已与新名 skill-publish-gate 对齐。",
+  "version": "2.1.0",
+  "description": "Skill 发布门禁规范库 v2.1.0（skill 代码安全 + SkillHub/ClawHub/ima 平台规范）。数据驱动：规则写在本文件，gate.py 不含词表；新增平台只需加 platform_profiles。",
   "spec": {
     "frontmatter": {
-      "required": ["slug", "version", "displayName"],
-      "recommended": ["name", "description", "summary", "tags"],
+      "required": [
+        "slug",
+        "version",
+        "displayName"
+      ],
+      "recommended": [
+        "name",
+        "description",
+        "summary",
+        "tags"
+      ],
       "slug_pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
       "slug_min": 2,
       "slug_max": 128,
@@ -36,15 +45,53 @@
       ".github",
       ".gitignore"
     ],
-    "forbidden_globs": ["*.pyc", "*.pyo", "*.class", ".DS_Store", "*.egg-info"],
+    "forbidden_globs": [
+      "*.pyc",
+      "*.pyo",
+      "*.class",
+      ".DS_Store",
+      "*.egg-info"
+    ],
     "bundle": {
       "warn_file_count": 100,
       "max_file_count": 1000,
       "warn_total_bytes": 10485760,
       "max_total_bytes": 52428800
     },
-    "version_locations": ["SKILL.md", "config.json", "metadata.json", "CHANGELOG.md"],
-    "artifact_dirs": ["allure-results", ".pytest_cache", "data", "__pycache__"]
+    "version_locations": [
+      "SKILL.md",
+      "config.json",
+      "metadata.json",
+      "CHANGELOG.md"
+    ],
+    "artifact_dirs": [
+      "allure-results",
+      ".pytest_cache",
+      "data",
+      "__pycache__"
+    ],
+    "platform_profiles": {
+      "ima": {
+        "display_name": "ima（腾讯 ima 知识库）",
+        "frontmatter_required": [
+          "name",
+          "displayName",
+          "description",
+          "version",
+          "trigger_keywords",
+          "reference",
+          "disclaimer"
+        ],
+        "forbidden_files": [
+          "_meta.json"
+        ],
+        "ascii_quotes_only": true,
+        "ascii_filename_only": true,
+        "max_trigger_keywords": 5,
+        "notes": "ima 包规范：frontmatter 七字段齐全、包内不得含 _meta.json（由平台生成）、字符串只用 ASCII 直引号、文件名纯 ASCII、trigger_keywords ≤5 条。来源为 v2 方案复盘记录。",
+        "unknown": "若平台口径与此处不符，改本段即可，不涉及 gate.py 代码。"
+      }
+    }
   },
   "rules": [
     {
@@ -54,12 +101,30 @@
       "severity": "critical",
       "redline": true,
       "authority_type": "platform_policy",
-      "scan_targets": ["docs", "scripts"],
-      "patterns": ["翻墙", "翻牆", "科学上网", "科學上網", "梯子", "GFW", "突破网络", "突破防火"],
-      "self_describing_markers": ["网络规避", "敏感词", "合规"],
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
+      "patterns": [
+        "翻墙",
+        "翻牆",
+        "科学上网",
+        "科學上網",
+        "梯子",
+        "GFW",
+        "突破网络",
+        "突破防火"
+      ],
+      "self_describing_markers": [
+        "网络规避",
+        "敏感词",
+        "合规"
+      ],
       "description": "命中网络规避敏感词，将触发 SkillHub 内容合规审核拒绝（下架风险）。删除相关表述，不要在任何语言（文档/注释/输出字符串）中出现。",
       "legal_source": "SkillHub 内容审核红线（三线并行：内容合规过滤）",
-      "platform_downgrade": {"clawhub": "medium"}
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
     },
     {
       "id": "RED-NET-002",
@@ -68,12 +133,31 @@
       "severity": "critical",
       "redline": true,
       "authority_type": "platform_policy",
-      "scan_targets": ["docs", "scripts"],
-      "patterns": ["shadowsocks", "v2ray", "clash", "trojan", "wireguard", "ssr", "vless", "vmess"],
-      "self_describing_markers": ["网络规避", "敏感词", "合规", "代理工具"],
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
+      "patterns": [
+        "shadowsocks",
+        "v2ray",
+        "clash",
+        "trojan",
+        "wireguard",
+        "ssr",
+        "vless",
+        "vmess"
+      ],
+      "self_describing_markers": [
+        "网络规避",
+        "敏感词",
+        "合规",
+        "代理工具"
+      ],
       "description": "命中代理工具同族词（shadowsocks/v2ray/clash/trojan 等），属网络规避敏感家族，会触发内容审核拒绝。除非技能本身合法且已获授权，否则删除。",
       "legal_source": "SkillHub 内容审核红线",
-      "platform_downgrade": {"clawhub": "medium"}
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
     },
     {
       "id": "RED-NET-003",
@@ -82,13 +166,32 @@
       "severity": "high",
       "redline": true,
       "authority_type": "platform_policy",
-      "scan_targets": ["docs", "scripts"],
-      "patterns": ["机场", "节点订阅", "订阅链接", "vpn 节点", "翻墙节点"],
-      "exclude_patterns": ["机场代码", "国际机场", "航空"],
-      "self_describing_markers": ["网络规避", "敏感词", "合规"],
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
+      "patterns": [
+        "机场",
+        "节点订阅",
+        "订阅链接",
+        "vpn 节点",
+        "翻墙节点"
+      ],
+      "exclude_patterns": [
+        "机场代码",
+        "国际机场",
+        "航空"
+      ],
+      "self_describing_markers": [
+        "网络规避",
+        "敏感词",
+        "合规"
+      ],
       "description": "「机场 / 节点订阅」在中文语境通常指代理服务，属敏感家族。确认无规避网络管理表述后再发布。",
       "legal_source": "SkillHub 内容审核红线",
-      "platform_downgrade": {"clawhub": "medium"}
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
     },
     {
       "id": "RED-NET-004",
@@ -97,7 +200,10 @@
       "severity": "high",
       "redline": true,
       "authority_type": "platform_policy",
-      "scan_targets": ["docs", "scripts"],
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
       "patterns": [
         "提升海外源可达性",
         "走通后.*恢复",
@@ -108,7 +214,9 @@
       ],
       "description": "把功能描述成「解决某类访问限制 / 提升海外源可达性 / 走通后 XX 即可恢复」会被判为规避手段叙事。应改为「源不可达 → 降级到国内源 + 离线快照 + 如实标注」的降级路径。",
       "legal_source": "SkillHub 内容审核红线（功能合法 ≠ 文档合规）",
-      "platform_downgrade": {"clawhub": "medium"}
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
     },
     {
       "id": "RED-AD-001",
@@ -117,9 +225,36 @@
       "severity": "high",
       "redline": false,
       "authority_type": "platform_policy",
-      "scan_targets": ["docs"],
-      "patterns": ["最好", "最佳", "第一", "唯一", "全网唯一", "顶级", "首选", "国家级", "最高级", "最强", "完美", "极致", "王牌", "销量第一", "领先全球", "No.1", "第一选择"],
-      "exclude_patterns": ["第一次使用", "第一时间", "第一步", "第一性原理", "排名第一的.*(学校|大学|机构)", "第一部分"],
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "最好",
+        "最佳",
+        "第一",
+        "唯一",
+        "全网唯一",
+        "顶级",
+        "首选",
+        "国家级",
+        "最高级",
+        "最强",
+        "完美",
+        "极致",
+        "王牌",
+        "销量第一",
+        "领先全球",
+        "No.1",
+        "第一选择"
+      ],
+      "exclude_patterns": [
+        "第一次使用",
+        "第一时间",
+        "第一步",
+        "第一性原理",
+        "排名第一的.*(学校|大学|机构)",
+        "第一部分"
+      ],
       "description": "广告法极限词（最好/第一/唯一/顶级等）会被内容审核拒绝或扣分。删除绝对化用语，用客观描述替代。",
       "legal_source": "《广告法》第九条 / SkillHub 内容审核"
     },
@@ -130,9 +265,28 @@
       "severity": "high",
       "redline": false,
       "authority_type": "platform_policy",
-      "scan_targets": ["docs", "scripts"],
-      "patterns": ["保证收益", "稳赚", "必涨", "荐股", "投资建议", "内部消息", "保本", "零风险", "涨停", "百分百盈利", "跟上车", "财富自由"],
-      "exclude_patterns": ["不构成投资建议", "仅供学习"],
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
+      "patterns": [
+        "保证收益",
+        "稳赚",
+        "必涨",
+        "荐股",
+        "投资建议",
+        "内部消息",
+        "保本",
+        "零风险",
+        "涨停",
+        "百分百盈利",
+        "跟上车",
+        "财富自由"
+      ],
+      "exclude_patterns": [
+        "不构成投资建议",
+        "仅供学习"
+      ],
       "description": "金融敏感用语（荐股/保证收益/内部消息）需金融资质，触发内容审核。涉及投资内容必须加「不构成投资建议」免责声明，否则删除。",
       "legal_source": "金融监管要求 / SkillHub 内容审核"
     },
@@ -143,7 +297,10 @@
       "severity": "medium",
       "redline": false,
       "authority_type": "best_practice",
-      "scan_targets": ["docs", "scripts"],
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
       "patterns": [
         "C:\\\\Users\\\\[A-Za-z0-9_]+",
         "/Users/[A-Za-z0-9_]+/",
@@ -160,9 +317,18 @@
       "severity": "medium",
       "redline": false,
       "authority_type": "best_practice",
-      "scan_targets": ["docs", "scripts"],
-      "patterns": ["[Ee]lisa", "陈彦廷", "Chen Yanting"],
-      "exclude_patterns": ["Elisabeth15501"],
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
+      "patterns": [
+        "[Ee]lisa",
+        "陈彦廷",
+        "Chen Yanting"
+      ],
+      "exclude_patterns": [
+        "Elisabeth15501"
+      ],
       "description": "文档中出现真实用户名/姓名。公开发布前脱敏为占位符（如 <your-name>）。公开笔名 Elisabeth15501 已排除。",
       "legal_source": "数据隐私最佳实践"
     },
@@ -173,8 +339,14 @@
       "severity": "low",
       "redline": false,
       "authority_type": "best_practice",
-      "scan_targets": ["docs"],
-      "patterns": ["整仓 [0-9]+ 个文件", "[0-9]+ 个文件/.*MB", "[0-9]+ 万文件"],
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "整仓 [0-9]+ 个文件",
+        "[0-9]+ 个文件/.*MB",
+        "[0-9]+ 万文件"
+      ],
       "description": "真实量测值（如「整仓 52 个文件」「80925 文件/74MB」）一句话暴露仓库规模。替换为可验证的模拟值。",
       "legal_source": "数据隐私最佳实践"
     },
@@ -185,8 +357,19 @@
       "severity": "medium",
       "redline": false,
       "authority_type": "platform_policy",
-      "scan_targets": ["docs"],
-      "patterns": ["subprocess", "os\\.system", "shutil\\.rmtree", "open\\(", "write_file", "save_file", "requests\\.get", "urllib"],
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "subprocess",
+        "os\\.system",
+        "shutil\\.rmtree",
+        "open\\(",
+        "write_file",
+        "save_file",
+        "requests\\.get",
+        "urllib"
+      ],
       "description": "脚本含文件写入/子进程/网络调用，但 SKILL.md 未见权限声明（读哪些文件 / 写哪里 / 起什么子进程）。补一段权限声明可对症 SkillHub T 红线「过度授权」。",
       "legal_source": "SkillHub TRACE 评测 T 维度（最小权限）"
     },
@@ -198,9 +381,22 @@
       "level": "info",
       "redline": false,
       "authority_type": "platform_policy",
-      "scan_targets": ["docs", "scripts"],
-      "patterns": ["--proxy", "HTTPS_PROXY", "HTTP_PROXY", "出站代理", "代理服务器"],
-      "self_describing_markers": ["内网", "企业", "定位为"],
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
+      "patterns": [
+        "--proxy",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "出站代理",
+        "代理服务器"
+      ],
+      "self_describing_markers": [
+        "内网",
+        "企业",
+        "定位为"
+      ],
       "description": "出站代理提及——请确认定位为「企业内网统一出网」场景，而非翻越网络管理限制。默认静音，用 --show-info 查看；确认无误后可 --learn 进白名单。"
     },
     {
@@ -209,7 +405,9 @@
       "severity": "critical",
       "redline": true,
       "authority_type": "platform_policy",
-      "scan_targets": ["scripts"],
+      "scan_targets": [
+        "scripts"
+      ],
       "patterns": [
         "eval\\s*\\(\\s*(base64|.*b64decode)",
         "exec\\s*\\(\\s*(base64|.*b64decode)",
@@ -223,7 +421,18 @@
         "os\\.system\\s*\\(\\s*[\"']rm\\s+-rf\\s+/",
         "subprocess\\.[Pp]open\\s*\\([^)]*shell\\s*=\\s*True[^)]*\\|\\s*(ba)?sh"
       ],
-      "self_describing_markers": ["防护", "防御", "检测", "安全", "扫描", "审计", "排查", "说明", "解释", "如何识别"],
+      "self_describing_markers": [
+        "防护",
+        "防御",
+        "检测",
+        "安全",
+        "扫描",
+        "审计",
+        "排查",
+        "说明",
+        "解释",
+        "如何识别"
+      ],
       "description": "命中疑似恶意代码模式（eval/exec 执行 base64、下载即执行、反向 shell、rm -rf / 等）。协议 5.1/5.4 禁止 Skill 携带恶意代码或实施安全风险。除非该模式是技能在描述/检测恶意代码本身（带防御性元语境），否则删除。",
       "clause": "第5.1条（不得包含恶意代码）/第5.4条（安全风险扫描）"
     },
@@ -233,16 +442,32 @@
       "severity": "high",
       "redline": true,
       "authority_type": "platform_policy",
-      "scan_targets": ["docs", "scripts"],
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
       "patterns": [
         "忽略.{0,6}(前面|以上|之前|上述).{0,4}(指令|提示|要求|规定|prompt|system)",
         "ignore\\s+(previous|prior|above|all).{0,6}(instructions|prompt|rules)",
         "disregard.{0,6}(instructions|prompt|rules)",
         "忘记.{0,4}(指令|规则|system|规定)",
         "越狱|jailbreak|JAILBREAK",
-        "DAN\\s*(模式|mode)?"
+        "\\bDAN\\b\\s*(模式|mode)?"
       ],
-      "self_describing_markers": ["注入", "防护", "防御", "检测", "防止", "安全", "不代表", "不会", "避免", "说明", "解释", "如何防范"],
+      "self_describing_markers": [
+        "注入",
+        "防护",
+        "防御",
+        "检测",
+        "防止",
+        "安全",
+        "不代表",
+        "不会",
+        "避免",
+        "说明",
+        "解释",
+        "如何防范"
+      ],
       "description": "命中 Prompt 注入特征（要求忽略之前指令 / 越狱 / DAN 等）。协议 5.4 要求防止通过 Skill 实施安全风险；若 Skill 自身在诱导宿主模型越权或被注入，应删除。若技能在描述如何防御注入（带防护元语境），则不报。",
       "clause": "第5.4条（防止通过 Skill 实施安全风险，包括 Prompt 注入）"
     },
@@ -253,7 +478,10 @@
       "severity": "critical",
       "redline": true,
       "authority_type": "platform_policy",
-      "scan_targets": ["docs", "scripts"],
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
       "origin": "ai-weekly-publish-gate —— 2026-09-22 ai-weekly 因文档措辞被判定内容审核不通过、整技能下架，该次事故固化的词表与叙事正则",
       "patterns": [
         "防火墙",
@@ -265,11 +493,342 @@
         "解决[^。\\n]{0,10}(访问|连接)不了",
         "走通[^。\\n]{0,20}(即可|就能)[^。\\n]{0,10}恢复"
       ],
-      "exclude_patterns": ["机场代码", "国际机场"],
-      "self_describing_markers": ["网络规避", "合规", "红线", "下架", "禁用"],
+      "exclude_patterns": [
+        "机场代码",
+        "国际机场"
+      ],
+      "self_describing_markers": [
+        "网络规避",
+        "合规",
+        "红线",
+        "下架",
+        "禁用"
+      ],
       "description": "命中 ai-weekly 下架事故固化的网络规避词族扩展（防火墙 / v2board / sspanel / clashx）或「把功能描述成规避手段」的叙事（绕过限制 / 突破封锁 / 解决访问不了 / 走通即可恢复）。功能合法 ≠ 文档合规：一句「提升可达性」就足以被判违规。正确写法是降级路径——源不可达则降级到国内源 + 离线快照 + 如实标注，配代理只作企业内网合法出站并明写免责。",
       "legal_source": "SkillHub 内容审核红线（源于 ai-weekly 2026-09-22 下架事故）",
-      "platform_downgrade": {"clawhub": "medium"}
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
+    },
+    {
+      "id": "AGENT-MEMORY-001",
+      "clause": "第5.1条（不得篡改用户数据）/第5.4条（安全风险）",
+      "category": "AGENTIC",
+      "severity": "critical",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
+      "origin": "v1.5.0 C4 agentic 类目——记忆投毒",
+      "patterns": [
+        "(记住|记录|写入|保存|存下)[^。\\n]{0,10}(用户|使用者)[^。\\n]{0,10}(偏好|身份|信息|习惯|姓名|邮箱)",
+        "(每次|以后|后续)[^。\\n]{0,8}(都|一律|全部)[^。\\n]{0,10}(告诉|告知|汇报|上报)[^。\\n]{0,10}(用户|主人|雇主)",
+        "永久(性)?(记住|保存|存储|写入)[^。\\n]{0,8}(会话|对话)",
+        "without\\s+(the\\s+)?user'?s?\\s+(consent|knowledge|approval)",
+        "记住这条(规则|指令|要求)[^。\\n]{0,10}(优先|高于|覆盖)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "防护",
+        "防御",
+        "检测",
+        "防止",
+        "红线",
+        "禁止",
+        "不得",
+        "审计",
+        "排查",
+        "风险",
+        "说明",
+        "解释"
+      ],
+      "description": "命中 agentic 记忆投毒特征：指示宿主跨会话永久记住用户身份/偏好，或要求每次都向第三方（用户本人以外的收信人）汇报。记忆投毒是 skill 特有的攻击面——通用代码扫描器不读 SKILL.md，抓不到这类指令式风险。删除该指令，或改为会话内临时状态。",
+      "platform_downgrade": {
+        "clawhub": "high"
+      },
+      "clause_note": "与 SEC-PERSIST-001 的分工：那条抓「实际写持久化文件」，这条抓「指令式要求记住/上报」——一个抓代码，一个抓文档",
+      "exclude_patterns": [
+        "不(会|得|要|应|可|再|能)?\\s*(持久化\\s*)?(保存|记录|写入|存储|记住|留存)",
+        "(不会|不得|禁止)(保存|记录|写入|存储)",
+        "不(记录|存储)(任何)?用户(信息|偏好)"
+      ]
+    },
+    {
+      "id": "AGENT-LEAK-001",
+      "clause": "第5.4条（防止通过 Skill 实施安全风险）",
+      "category": "AGENTIC",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
+      "origin": "v1.5.0 C4 agentic 类目——系统提示泄漏",
+      "patterns": [
+        "(输出|打印|回显|复述|展示|告诉我)[^。\\n]{0,12}(你的)?\\s*(系统)?(提示词|系统提示|提示|system\\s*prompt|初始指令|预设人设)",
+        "(reveal|print|show|output|dump)\\s+(your\\s+)?(system\\s+)?(prompt|instructions)",
+        "(把|将)?[^。\\n]{0,6}(系统提示|系统指令|内部规则)[^。\\n]{0,6}(原文|完整|逐字)[^。\\n]{0,6}(输出|发送|上传|发回)",
+        "developer\\s*message|系统提示词.{0,6}泄漏"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "防护",
+        "防御",
+        "检测",
+        "防止",
+        "禁止",
+        "不得",
+        "不会",
+        "避免",
+        "审计",
+        "说明",
+        "解释",
+        "如何识别"
+      ],
+      "exclude_patterns": [
+        "不(会|得|要|应|可|再|能)?\\s*(输出|打印|回显|复述|展示|告诉|暴露|泄露|外传)",
+        "无需(输出|回显|打印)",
+        "(不会|不得|禁止)(输出|回显|打印|泄露)"
+      ],
+      "description": "命中系统提示泄漏特征：要求宿主输出/回显自己的系统提示、初始指令或内部规则。这类指令会把宿主的安全约束搬进可被记录的地方，违反协议 5.4。删除该指令。",
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
+    },
+    {
+      "id": "AGENT-AUTONOMY-001",
+      "clause": "第5.4条（最小权限原则）/TRACE 评测 T 维度",
+      "category": "AGENTIC",
+      "severity": "high",
+      "redline": false,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "docs"
+      ],
+      "origin": "v1.5.0 C4 agentic 类目——过度代理权",
+      "patterns": [
+        "(不要|无需|不用|不必)[^。\\n]{0,6}(询问|征求|确认|征得)[^。\\n]{0,6}(用户|使用者)?[^。\\n]{0,4}(同意|许可|批准|确认)",
+        "(直接|自动|自行)[^。\\n]{0,6}(删除|清空|覆盖|支付|下单|转账|发布|提交)[^。\\n]{0,8}(文件|数据|订单|款项|仓库)?",
+        "未经[^。\\n]{0,8}(确认|同意|授权)[^。\\n]{0,8}(即|就|直接)",
+        "无需[^。\\n]{0,6}(用户)?[^。\\n]{0,4}(确认|授权)[^。\\n]{0,8}(即可|就能|直接)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "防护",
+        "防御",
+        "检测",
+        "防止",
+        "红线",
+        "禁止",
+        "不得",
+        "风险",
+        "审计",
+        "说明",
+        "示例"
+      ],
+      "exclude_patterns": [
+        "直接接",
+        "直接对接",
+        "直接用于",
+        "可用于",
+        "能直接",
+        "即可接",
+        "发布脚本",
+        "发布流程",
+        "发布前",
+        "发布时",
+        "发布的",
+        "发布出去",
+        "提交 commit",
+        "提交代码"
+      ],
+      "description": "命中过度代理权特征：指示宿主跳过用户确认就执行不可逆动作（删除/支付/发布/转账）。宿主 Agent 被诱导后造成的实际损失由用户承担，这是 TRACE T 维度「最小权限」最典型的失分点。改为「先确认再执行」。注：「直接接 CI / 可直接发布脚本」这类描述本技能自己的发布方式属正常表述，已排除。",
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
+    },
+    {
+      "id": "AGENT-REFUSAL-001",
+      "clause": "第5.1条（不得实施安全风险）/第5.4条",
+      "category": "AGENTIC",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "docs"
+      ],
+      "origin": "v1.5.0 C4 agentic 类目——反拒绝 / 安全绕过",
+      "patterns": [
+        "(不要|禁止|不得|不可以)[^。\\n]{0,6}(拒绝|说\\s*不|提示风险|警告用户|告知风险)",
+        "(无论|不管)[^。\\n]{0,10}(用户)[^。\\n]{0,10}(说什么|怎么问)[^。\\n]{0,8}(都|一律|必须)[^。\\n]{0,6}(执行|回答|照做)",
+        "(必须|一律|始终)[^。\\n]{0,6}(回答|执行)[^。\\n]{0,10}(不加判断|不附带条件|不提示)",
+        "you\\s+must\\s+(always\\s+)?(comply|obey)[^\\n]{0,20}(without|no)\\s+(question|hesitation|caveat)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "防护",
+        "防御",
+        "检测",
+        "防止",
+        "红线",
+        "禁止",
+        "不得",
+        "审计",
+        "说明",
+        "解释",
+        "识别"
+      ],
+      "description": "命中反拒绝特征：要求宿主不得拒绝、不得提示风险、或无条件执行。反拒绝指令会把宿主的对齐机制（该说「不」的时候说不）拆掉，是 agentic skill 最危险的指令类型之一。删除该指令。",
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
+    },
+    {
+      "id": "AGENT-TRIGGER-001",
+      "clause": "TRACE 评测 R 维度（触发准确性）",
+      "category": "AGENTIC",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "best_practice",
+      "scan_targets": [
+        "docs"
+      ],
+      "origin": "v1.5.0 C4 agentic 类目——触发词滥用",
+      "patterns": [
+        "(所有|任何|一切|任意)[^。\\n]{0,6}(问题|请求|任务|对话)[^。\\n]{0,10}(都|一律|必须)[^。\\n]{0,6}(调用|使用|触发|本技能)",
+        "always\\s+(use|call|invoke|trigger)[^\\n]{0,30}(for|on)\\s+(all|any|every)",
+        "无条件(调用|触发|使用)本技能"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "避免",
+        "防止",
+        "不要",
+        "红线",
+        "说明",
+        "示例",
+        "检测"
+      ],
+      "description": "触发词写成「所有/任何问题都调用本技能」会让技能在无关场景被拉起，既拖慢宿主又拉低 TRACE R 维度。改为具体场景描述（做什么用本技能），并在 use_when 里列清触发与不触发的边界。"
+    },
+    {
+      "id": "MCP-PRIV-001",
+      "clause": "第5.4条（最小权限原则）/TRACE 评测 T 维度",
+      "category": "MCP",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "docs"
+      ],
+      "origin": "v1.5.0 C3 MCP 专项——工具权限过宽",
+      "patterns": [
+        "\"?(mcpServers|mcp_servers)\"?[^。\\n]{0,40}\"(permissions?|scopes?|allow)\"?\\s*[:=]\\s*\"?\\*",
+        "(任意|全部|所有)文件(读写|访问|权限)",
+        "(full|unrestricted|unlimited)\\s+(file\\s+)?(access|permission)",
+        "rm\\s+-rf\\s+(~|/|\\$HOME|\\*)",
+        "(禁用|关闭|跳过)[^。\\n]{0,6}(权限确认|沙箱|隔离|安全检查)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "防护",
+        "防御",
+        "检测",
+        "防止",
+        "红线",
+        "禁止",
+        "不得",
+        "审计",
+        "风险",
+        "说明",
+        "反面",
+        "恶意",
+        "反面教材",
+        "以下是需要避免的写法"
+      ],
+      "exclude_patterns": [
+        "反向 shell",
+        "rm -rf / 等",
+        "等）"
+      ],
+      "description": "命中 MCP 工具权限过宽：声明通配权限、任意文件读写、或要求跳过沙箱/权限确认。MCP 配置是 skill 独有的信任边界——宿主给了工具就等于给了权限，写 `*` 意味着这个 skill 能碰到用户全部文件。收敛到具体目录与只读权限。注：本条规则自身在文档里枚举这些反例（\"rm -rf / 等\"），已排除。",
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
+    },
+    {
+      "id": "MCP-PROMPT-001",
+      "clause": "第5.4条（防止通过 Skill 实施安全风险，包括 Prompt 注入）",
+      "category": "MCP",
+      "severity": "critical",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "docs",
+        "scripts"
+      ],
+      "origin": "v1.5.0 C3 MCP 专项——工具描述投毒（tool poisoning）",
+      "patterns": [
+        "(不要|别|勿)[^。\\n]{0,6}(告诉|告知|提示|向)[^。\\n]{0,6}(用户|使用者)[^。\\n]{0,12}(这个|此|该)?(工具|命令|操作|动作)",
+        "(不要|别|勿)[^。\\n]{0,4}(在[^。\\n]{0,6})?(回答|输出|回复)[^。\\n]{0,6}(中|里)?[^。\\n]{0,4}提到",
+        "do\\s+not\\s+(tell|inform|mention\\s+(this\\s+)?to)\\s+the\\s+user",
+        "(执行|调用)[^。\\n]{0,8}(之前|前)[^。\\n]{0,10}(不要|无需)[^。\\n]{0,6}(检查|确认|询问)",
+        "before\\s+(using|calling)[^\\n]{0,30}(do\\s+not|don'?t|never)\\s+(ask|check|confirm|verify)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "防护",
+        "防御",
+        "检测",
+        "防止",
+        "红线",
+        "禁止",
+        "不得",
+        "审计",
+        "说明",
+        "解释",
+        "识别",
+        "风险",
+        "反面教材",
+        "攻击话术",
+        "话术示例",
+        "以下话术",
+        "bad example",
+        "攻击样例"
+      ],
+      "description": "命中 MCP 工具描述投毒：工具描述里指示模型对用户隐瞒该次操作、或跳过调用前检查。这是 MCP 生态里被反复利用的一类攻击——工具描述会被读进模型上下文，等于一段隐藏指令。删除隐瞒类表述。",
+      "platform_downgrade": {
+        "clawhub": "high"
+      }
+    },
+    {
+      "id": "MCP-DECLARE-001",
+      "clause": "第5.4条（声明与行为一致）",
+      "category": "MCP",
+      "severity": "medium",
+      "redline": false,
+      "level": "info",
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "docs"
+      ],
+      "origin": "v1.5.0 C3 MCP 专项——MCP 使用未声明",
+      "patterns": [
+        "mcpServers|mcp_servers|MCP\\s*工具|mcp\\s*server"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "示例",
+        "配置示例",
+        "反面教材",
+        "说明"
+      ],
+      "requires_declaration": true,
+      "description": "文中提到 MCP 工具/服务。请在 frontmatter 的 requires 里显式声明所依赖的 MCP server（与 ClawHub 的 requires 一致性检查同源），否则宿主与用户都无法判断这个 skill 会动哪些外部工具。默认静音（几乎每篇提到 MCP 的文档都该声明，逐行报是噪音），用 --show-info 查看。"
     }
-  ]
+  ],
+  "layout_note": "顶层只有 version/description/rules/layout_note 四项；所有可被 _load_spec() 读到的配置都在 spec 子树里，rules 是规则数组。platform_profiles 曾放在顶层，导致 check_ima_compliance 静默全跳过（2026-10-06 修复）。"
 }

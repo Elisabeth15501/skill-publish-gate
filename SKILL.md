@@ -1,10 +1,10 @@
 ---
 name: skill-publish-gate
 slug: skill-publish-gate
-version: 2.0.0
+version: 2.1.0
 displayName: Skill 发布门禁（代码安全 + 平台规范）
-summary: 发布 Skill 前本地跑一遍，一次看全「代码安全」与「SkillHub/ClawHub 平台规范」，命中即阻断
-tags: [skill, 发布门禁, 合规预检, 代码安全, preflight, 上架检查, skillhub, clawhub, publish-gate]
+summary: 发布 Skill 前本地跑一遍，一次看全「代码安全」与「SkillHub/ClawHub/ima 平台规范」，命中即阻断
+tags: [skill, 发布门禁, 合规预检, 代码安全, preflight, 上架检查, skillhub, clawhub, ima, sarif, publish-gate]
 license: MIT-0
 description: >-
   Skill 发布门禁（preflight gate）——把「代码安全」与「平台规范」收成一道本地检查。
@@ -100,7 +100,7 @@ disclaimer: 本门禁仅做本地规范预检与静态安全扫描，不构成�
 ## 适用范围与边界
 
 **适合用本门禁**：任何准备发布的本地 skill 目录（单技能 `check` / 批量 `dirs`），无论目标是
-SkillHub、ClawHub 还是先开源到 GitHub。
+SkillHub、ClawHub、腾讯 ima 还是先开源到 GitHub。
 
 **不适用 / 容易误用的场景**（别硬套）：
 
@@ -108,6 +108,9 @@ SkillHub、ClawHub 还是先开源到 GitHub。
 - **深度应用漏洞审计**（SQLi / XSS / 依赖 CVE / 污点分析）：那是 CodeQL、Semgrep、domsec、
   Codex Security 的职责。本门禁是**发布包级别的轻量体检**，刻意不做工业级深层分析——
   它要的是「发布前 5 秒看出会不会被拒/下架」，不是把代码审穿。
+  但 v2.1.0 起这层**可以缝进来**：`--sarif-in` 吃外部 SARIF、`--deep-scan` 直接调外部扫描器，
+  结果并入同一个 verdict（自动降一级）。也就是说「谁做深度分析」可以换，「谁来判能不能发」
+  不换。
 - **国内监管合规审计报告**（金融/广告法/隐私法律依据文书）：那是 `skill-compliance-check` 的职责。
 - **把门禁结论当审核保证**：最终能否上架由各平台审核决定（见底部免责声明）。
 
@@ -118,10 +121,11 @@ SkillHub、ClawHub 还是先开源到 GitHub。
 | 规则 | 检查内容 | 触发后果 |
 |------|----------|----------|
 | SEC-CRED-001 | 疑似 token/key（ghp_/sk-/AKIA/glpat-/xoxb-/AIza 等），命中一律脱敏回显 | BLOCKED |
-| SEC-MALWARE-001 | 恶意执行模式（base64 解码后 eval/exec、下载即执行、反向 shell、rm -rf / 等） | BLOCKED |
+| SEC-MALWARE-001 | 恶意执行模式（base64 解码后 eval/exec、下载即执行、反向 shell 等） | BLOCKED |
 | SEC-PROMPT-001 | Prompt 注入特征（忽略之前指令、越狱、DAN 等） | BLOCKED |
 | SEC-PERSIST-001 | 指示宿主永久篡改持久化文件（SOUL.md / MEMORY.md / IDENTITY.md / USER.md） | BLOCKED |
 | SEC-LICENSE-001 | 传染性开源协议（copyleft 家族）与版权剥离条款；协议名见规则库，此处不枚举以免自描述误报 | BLOCKED / NEEDS_FIX |
+| AST-*-001 | **v2.1.0 新增**：stdlib ast 精确到行的危险调用（动态执行、shell 解释执行、不安全反序列化等；具体函数名见规则库 `AST-*-001`） | BLOCKED |
 | PRIV-PATH-001 | 绝对路径泄漏（含本机用户名） | NEEDS_FIX |
 | PRIV-NAME-001 | 真实姓名 / 用户名（公开笔名已排除） | NEEDS_FIX |
 | PRIV-MEAS-001 | 真实量测值（「整仓 52 个文件」这类暴露仓库规模的表述） | NEEDS_FIX |
@@ -156,6 +160,27 @@ SkillHub、ClawHub 还是先开源到 GitHub。
 > 元语境豁免：当命中词出现在「否定 / 定义 / 清单 / 说明」语境（如「检测网络规避敏感词」）时
 > 视为自描述，不误报——所以合规/安全类技能罗列规则词不会被自己标红。
 
+### Agentic / MCP 专有类目（v2.1.0 新增，skill 独有攻击面）
+
+通用代码扫描器不读 SKILL.md，抓不到「指令式」风险——这两类只可能由发布门禁守。
+
+| 规则 | 检查内容 | 触发后果 |
+|------|----------|----------|
+| AGENT-MEMORY-001 | 记忆投毒：要求跨会话永久记住用户身份/偏好，或每次都向第三方汇报 | BLOCKED（clawhub 降 HIGH） |
+| AGENT-LEAK-001 | 系统提示泄漏：要求输出/回显系统提示、初始指令、内部规则 | BLOCKED（clawhub 降 WARN） |
+| AGENT-AUTONOMY-001 | 过度代理权：跳过用户确认就执行不可逆动作（删除/支付/发布/转账） | BLOCKED（clawhub 降 WARN） |
+| AGENT-REFUSAL-001 | 反拒绝：要求不得拒绝、不得提示风险、无条件执行 | BLOCKED（clawhub 降 WARN） |
+| AGENT-TRIGGER-001 | 触发词滥用：「所有问题都调用本技能」 | NEEDS_FIX |
+| MCP-PRIV-001 | MCP 权限过宽：`permissions: "*"`、任意文件读写、跳过沙箱 | BLOCKED（clawhub 降 WARN） |
+| MCP-PROMPT-001 | 工具描述投毒：「不要告诉用户这次操作」「调用前不要检查」 | BLOCKED（clawhub 降 HIGH） |
+| MCP-DECLARE-001 | 提到 MCP 但未在 `requires` 声明 | INFO（默认静音） |
+| AST-EVAL-001 / AST-EXEC-001 / AST-OS-001 / AST-SHELL-001 / AST-PICKLE-001 | stdlib ast 精确行号：动态执行、shell 解释执行、不安全反序列化（函数名与行号以实际扫描结果为准） | BLOCKED（high） |
+| AST-PARSE-001 | 文件解析失败（该文件未被 ast 覆盖） | INFO（默认静音） |
+
+> 这批规则**不叠加全局元语境词表**（`use_global_meta_markers: false`）——它们的攻击句式本身
+> 就是「不要 X」「无需确认」，叠加「不要」会让规则自己废掉。每条规则改用自己的
+> `exclude_patterns` 精确豁免否定式表述（如「本技能不输出系统提示词」不算违规）。
+
 ### ClawHub 模式（`--platform clawhub`）专属
 
 | 类别 | 检查内容 | 触发后果 |
@@ -168,6 +193,53 @@ SkillHub、ClawHub 还是先开源到 GitHub。
 
 > 注：安全类检查（凭据 / 恶意代码 / Prompt 注入 / 持久化篡改 / 协议传染）在三种平台模式下
 > **均为 BLOCKER**，是各平台安全扫描的本地映射，不随平台降级。
+
+### ima 模式（`--platform ima`）专属
+
+腾讯 ima 知识库的包口径与 SkillHub 有四处不同，单独一档（规则见 `platform_profiles.ima`）：
+
+| 规则 | 检查内容 | 触发后果 |
+|------|----------|----------|
+| IMA-FM-001 | frontmatter 七字段齐全（`name`/`displayName`/`description`/`version`/`trigger_keywords`/`reference`/`disclaimer`） | BLOCKED |
+| IMA-FILE-001 | 包内含平台生成物 `_meta.json` | BLOCKED |
+| IMA-QUOTE-001 | 字符串用了全角引号 `“”‘’`（ima 只认 ASCII 直引号） | NEEDS_FIX |
+| IMA-NAME-001 | 文件名含非 ASCII 字符 | NEEDS_FIX |
+| IMA-TRIGGER-001 | `trigger_keywords` 超过 5 条 | NEEDS_FIX |
+
+> 该 profile 的字段清单来自 v2 方案的复盘记录。**若平台口径与此处不符，改
+> `rules/skillhub-spec.json` 的 `platform_profiles.ima` 一段即可，不涉及 `gate.py`。**
+
+### 缝接层（v2.1.0 新增，全部可选、默认关闭）
+
+本门禁只判「能不能发布」，不重复造通用代码审计。深度结果通过三个入口并入同一个 verdict：
+
+```bash
+# ① 产出 SARIF 2.1.0（喂 GitHub Code Scanning / 任意 SARIF 消费方）
+python scripts/gate.py check --dir <skill目录> --format sarif -o gate.sarif
+
+# ② 导入外部扫描器的 SARIF（domsec / SkillSpector / Codex Security 都吃）
+python scripts/gate.py check --dir <skill目录> --sarif-in domsec.sarif
+#   外部 finding 一律降一级（critical→high），且一律不带 redline；
+#   已过验证层的工具可加 --sarif-trusted 恢复原始档位
+
+# ③ 直接调外部扫描器（不经 shell，失败不影响 L0 判定）
+python scripts/gate.py check --dir <skill目录> \
+    --deep-scan "python3 ~/tools/scanner.py --format sarif {dir}"
+#   {dir} 会被替换为目标目录；路径含空格时必须加引号
+#   --offline 是硬开关：与 --deep-scan 互斥，防止 CI 手滑把源码传给外部服务
+
+# ④ 基线：抑制「确认过的误报」（指纹 = sha256(ruleId|file|line|title) 前 16 位）
+python scripts/gate.py check --dir <skill目录> --write-baseline ./baseline.json
+python scripts/gate.py check --dir <skill目录> --baseline ./baseline.json
+#   被基线抑制的项不删除，降为 info 保留可追溯——「当初为什么放过它」必须查得到
+
+# ⑤ 外部配置：阈值 / 封禁文件追加 / 自定义规则（只许更严）
+python scripts/gate.py check --dir <skill目录> --config ./gate.json
+python scripts/gate.py check --dir <skill目录> --config ./gate.json --strict  # 锁死内置规则库
+```
+
+**配置只能让门禁更严，不能更松**：阈值只许调低、红线规则不可被覆盖或降级、`--strict` 下
+任何覆盖直接报错（仅允许追加类）。理由是发布门禁的定位——它不该因为一个配置文件而失守。
 
 ## 执行逻辑
 
@@ -190,6 +262,11 @@ python scripts/gate.py check --dir <skill目录> --all-files
 python scripts/gate.py check --dir <skill目录> --platform clawhub
 # GitHub 开源预检（豁免 LICENSE / .github / .gitignore）
 python scripts/gate.py check --dir <skill目录> --platform github
+# ima 预检（七字段 / 零 _meta.json / ASCII 引号 / 纯 ASCII 文件名 / 触发词 ≤5）
+python scripts/gate.py check --dir <skill目录> --platform ima
+# SARIF 产出与导入（缝接层，详见「缝接层」一节）
+python scripts/gate.py check --dir <skill目录> --format sarif -o gate.sarif
+python scripts/gate.py check --dir <skill目录> --sarif-in external.sarif
 # 回灌：发布后审核发现的新坑写回 rules/feedback.json（防复发核心）
 python scripts/gate.py check --dir <skill目录> --learn '{"type":"blocker","pattern":"新危险词","reason":"平台审核打回：..."}'
 python scripts/gate.py check --dir <skill目录> --learn '{"type":"whitelist","pattern":"企业内网出站","reason":"已确认定位为内网场景"}'
@@ -204,7 +281,9 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 {
   "skill": "my-skill",
   "directory": "/abs/path/to/my-skill",
-  "spec_version": "2.0.0",
+  "platform": "skillhub",
+  "spec_version": "2.1.0",
+  "config_applied": ["/* 外部配置生效摘要，空数组=未用 --config */"],
   "disclaimer": "本门禁仅做本地规范预检，不构成任何平台的上架保证……",
   "verdict": {
     "verdict": "PASS | NEEDS_FIX | BLOCKED",
@@ -218,7 +297,8 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
       "file": "SKILL.md", "line": 1, "found": "SKILL.md 不存在",
       "recommendation": "目标目录必须包含 SKILL.md。",
       "redline": true, "authority_type": "platform_policy",
-      "clause": "（可选；仅安全类问题回显协议条款出处）"
+      "clause": "（可选；仅安全类问题回显协议条款出处）",
+      "source": "（可选；l2 = 来自 --sarif-in / --deep-scan 的外部扫描器）"
     }
   ],
   "info_hits": [ "/* 同 issues 结构，仅 INFO 级；默认不计入 verdict，--show-info 才展示 */" ]
@@ -240,6 +320,11 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 
 规则数据集中在 `rules/skillhub-spec.json`，新增/调整红线直接改 JSON 即可，不用动脚本
 （规则引擎直接把 `patterns` 当正则编译，元语境豁免、平台降级、白名单、回灌都在脚本侧统一处理）。
+
+规则条目可用字段：`id` / `category` / `severity` / `redline` / `level`(info 静音) /
+`patterns` / `exclude_patterns` / `self_describing_markers` / `use_global_meta_markers`(默认 true) /
+`platform_downgrade` / `scan_targets`(docs|scripts|all) / `clause` / `origin`(来源溯源) /
+`description` / `authority_type`。
 
 ## 回灌闭环（防复发核心）
 

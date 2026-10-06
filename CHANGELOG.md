@@ -1,3 +1,101 @@
+## [2.1.0] — 2026-10-06
+
+**本轮做的是《优化方案（竞品对标版·v3）》里的 P0 全部七项 + `--platform ima`。**
+方案里把这批叫「v1.5.0」，但 v2.0.0 已被上一版的定位升级 + 合并占用，
+**版本号只能往前不能回退**，故落为 **2.1.0**（纯增量、无破坏性变更，符合 MINOR）。
+
+### 缝接层：L0 与深度扫描器之间补上公共货币
+
+| 能力 | 参数 | 说明 |
+|---|---|---|
+| SARIF 2.1.0 产出 | `--format sarif` | `$schema`/`version`/`runs[].tool.driver.rules+results`/`level` 映射/`region.startLine` 齐全，指纹写进 `partialFingerprints`（规范里存放跨运行稳定标识的位置，GitHub Code Scanning 会用它跟踪复发） |
+| SARIF 导入 | `--sarif-in FILE` | 吃任意外部扫描器结果；畸形输入只跳过该条并记日志，不崩 |
+| 统一指纹 | 自动 | `sha256(ruleId\|file\|line\|title)` 前 16 位。**刻意不含命中原文**——否则改一次文案就要重建一次基线 |
+| 基线抑制 | `--baseline` / `--write-baseline` | 被抑制项降为 info 保留可追溯，不删除（否则基线成了无法审计的黑洞） |
+| 外部配置 | `--config` / `--strict` | 阈值、封禁文件追加、自定义规则、白名单 |
+| 外部扫描器 | `--deep-scan CMD` / `--offline` | `{dir}` 占位符替换；不经 shell；失败不影响本地判定 |
+
+**两条不变量**（改这块前先看这段）：
+1. **L2 finding 一律降一级**（critical→high），且一律不带 `redline`。依据是 LLM 语义层实测精度
+   约 87%——把它的 critical 直接当 BLOCKER 会被误报轰炸，用户随后只会把工具关掉。
+   `--sarif-trusted` 是唯一例外，且要调用方自己负责。
+2. **深度层失败绝不影响 L0 判定**。扫描器不存在/超时/输出不合法，一律只记一条日志。
+   已测：二进制不存在、退出码非 0、输出非 JSON、输出非 SARIF，四种情况 verdict 均与不带时一致。
+
+### 能力补齐
+
+- **C3 MCP 专项**（`MCP-PRIV-001` / `MCP-PROMPT-001` / `MCP-DECLARE-001`）：
+  工具权限过宽（`permissions: "*"`、任意文件读写、跳过沙箱）、工具描述投毒（"不要告诉用户
+  这次操作"、"调用前不要检查"）、提到 MCP 却未在 `requires` 声明（降 INFO，默认静音）。
+- **C4 agentic 类目**（`AGENT-MEMORY-001` / `AGENT-LEAK-001` / `AGENT-AUTONOMY-001` /
+  `AGENT-REFUSAL-001` / `AGENT-TRIGGER-001`）：记忆投毒、系统提示泄漏、过度代理权、
+  反拒绝绕过、触发词滥用。**这是通用代码扫描器够不到的层**——它们不读 SKILL.md，
+  抓不到指令式风险。
+- **C1′ stdlib ast 薄兜底**（`ast_guard.py`）：动态执行、shell 解释执行、不安全反序列化、
+  非安全 YAML 加载、动态导入，给精确行号。**不做污点追踪**——那是 Codex Security /
+  SkillSpector 的主场，自己写是拿短板上别人的长处。
+- **`--platform ima`**：frontmatter 七字段、包内零 `_meta.json`、ASCII 直引号、
+  纯 ASCII 文件名、`trigger_keywords ≤5`。规则写在 `platform_profiles.ima`，
+  **平台口径变了改 JSON 即可，不动 `gate.py`**。
+
+### 规则引擎修复（都是被自家文档 dogfood 出来的）
+
+1. **`SEC-PROMPT-001` 的 `DAN` 缺词边界**（v1.x 就存在的旧 bug）：
+   `DAN\s*(模式|mode)?` 会把 `ast_guard.py`、`check_ast_dangerous_calls` 里的 "dan" 当成
+   越狱模式命中。改为 `\bDAN\b`。**这是本轮修的第一个历史缺陷。**
+2. **新增 `use_global_meta_markers` 开关**（默认 true）：全局 `META_MARKERS` 含「不要」「无需」，
+   而 agentic 攻击句式本身就是「不要 X」「无需确认」——叠加后规则会自己废掉。
+   9 条 agentic/MCP 规则显式关掉，改用自己的 `exclude_patterns` 精确豁免否定式表述。
+3. **新增规则目录行豁免**（`_is_rule_catalog_row`）：文档里那张检查项表会命中自己写的规则。
+   口径刻意收窄——必须**同时**满足 ① 以 `|` 开头（表格行）② 行内含本规则自己的 ID
+   ③ 行内含档位词（BLOCKED/NEEDS_FIX…）。只满足一条不豁免，否则真违规排成表格就能溜过去。
+   已验证：表格行但无档位词的攻击句仍被拦。
+4. **`MCP-PRIV-001` 移除过宽的「示例」marker**：否则攻击句写「配置示例：permissions: "\*"」
+   就能躲过去。
+
+### 代码审计（skill-clean-audit 第一性原理审计，同日）
+
+对本轮新代码做 A（理解成本）/ B（修改风险）两轴审计，**3 红 12 黄 7 绿**。红项已全部修掉：
+
+| 红项 | 问题 | 修法 |
+|---|---|---|
+| 🔴 A1 | `sarif_io.from_sarif` docstring 承诺「畸形输入不抛异常」，实测 `message: null` / `properties: null` 直接 `AttributeError`，**整进程带 traceback 崩掉、L0 判定一个字都没输出**。根因是 `d.get(k, {})` 在「key 存在但值为 null」时返回 `None`——而这正是真实 SARIF 里最常见的形态 | 新增 `_as_dict` / `_as_text` 两个安全取值器，外部字段一律先过这一道；6 种 null 输入实测全不崩 |
+| 🔴 B2 | `check_ima_compliance` 把 `os.walk` 生成器 `_iter_skill_files()` 放在**外层循环体内**，复杂度 O(禁用项数 × 全目录文件数) | 清单提到循环外取一次，(b)(c)(d) 三段共用 |
+| 🔴 B1 | `SkillHubGate.apply_baseline()` 与 `sarif_io.apply_baseline()` **同名、不同签名、不同返回类型** | 前者改名 `suppress_baseline`（读文件在 gate、拆分在模块） |
+
+另修三个高价值黄项：
+- **B3**：`check_ast_dangerous_calls` 丢弃了 `ast_guard` 产出的 `why` 字段，安全报告里只剩
+  「怎么改」没有「为什么危险」→ 已并入 `clause`。
+- **B8**：`platform_profiles` 原放在 JSON 顶层，而 `_load_spec()` 只返回 `spec` 子树 →
+  `check_ima_compliance` 恒为 None、**ima 检查静默全跳过**（不报错，只是没检查）。
+  已挪进 `spec` 子树，并在顶层加 `layout_note` 说明布局约定。
+- **A6**：`ast_guard.GuardResult` 的 docstring 里写着「后者是审计必挑的点」——
+  在源码里预告审计意见属自指式注释，读者会以为「已经审过了」，已改为就事论事的说明。
+
+> 审计的一条结论值得单独记：**这三个红项里有两个（A1、B8）的失败模式都是「静默」**——
+> 一个崩在缝接层让整个门禁没输出，一个让整档检查悄悄不跑。门禁这类工具最危险的失败
+> 不是误报，是静默失效。后续加检查项时，「不报错」不等于「检查到了」。
+
+### 跨平台 bug 修复（Windows）
+
+- **`shlex.split` 吃反斜杠**：`--deep-scan` 命令里的 Windows 路径 `C:\Users\...\x.py` 会被
+  按 POSIX 转义规则拆成 `C:Users...x.py`，扫描器静默不生效。改为先归一化为正斜杠再拆词。
+- **路径含空格时引号被吃**：`posix=True` 会剥掉引号，`AppData\Local\Temp` 这类路径必中。
+  改用 `posix=False` + 自剥一层引号（只剥首尾配对的那层，否则 `it's` 会被削成 `t`）。
+  文档已写明含空格必须加引号。
+
+### 自反与回归（已实测）
+
+- **三平台零回归**：skillhub BLOCKED(2) / github PASS / clawhub NEEDS_FIX(2)，与 v2.0.0 完全一致。
+- **门禁抓到本轮自己写的代码注释**：为解释 shlex bug 而写的 `C:\Users\me\x.py` 示例被
+  `PRIV-PATH-001` 判为绝对路径泄漏——规则判得对，改的是注释不是规则。
+  这与 v2.0.0 那次「检查项表写 GPL/AGPL 被 `OSS-COPYLEFT-001` 拦」是同一个教训。
+- **验证方式**：37 项模块单测 + 60 项端到端 fixture 全部通过，含正反两面
+  （该拦的拦住、该豁免的豁免、带/不带 `--deep-scan` 的 L0 结论一致性）。
+  **不以「跑起来没报错」当通过。**
+
+---
+
 ## [2.0.0] — 2026-10-06
 
 **定位变更**：从「SkillHub 发布前本地门禁」扩展为 **「Skill 发布门禁（代码安全 + 平台规范 + 内容措辞）」**。
