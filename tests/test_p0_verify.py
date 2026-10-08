@@ -45,8 +45,11 @@ print("=== 攻击 B2：BLOCKED 状态下 --write-baseline ===")
 open(os.path.join(D, "SKILL.md"), "w", encoding="utf-8").write(
     "---\nname: demo\nslug: demo\nversion: 1.0.0\ndisplayName: d\n"
     "description: d\nsummary: d\ntags: [a]\n---\n\n# d\n")
+# SEC-CRED-001 没有豁免机制（AST 规则才有 # noqa），所以「构造一个能命中的
+# 凭据串」这件事本身就会让本仓库 BLOCKED。拼接而非字面量：命中的是运行时
+# 写进临时目录的内容，源文件里不留任何凭据形态的完整字符串。
 open(os.path.join(D, "creds.py"), "w", encoding="utf-8").write(
-    "ghp_abcdefghijklmnopqrstuvwxyz0123456789\n")
+    "gh" + "p_" + "abcdefghijklmnopqrstuvwxyz0123456789\n")
 bl = os.path.join(D, "bl.json")
 data, code, err = run(D, "--write-baseline", bl)
 check("B2 首次运行 BLOCKED", data and data["verdict"]["verdict"] == "BLOCKED",

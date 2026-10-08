@@ -44,6 +44,20 @@ git clone https://github.com/<你>/skillhub-gate.git
 依赖：PyYAML。脚本缺失时自动尝试 `pip install pyyaml`；仍不可用则作为 BLOCKED 报错，
 **不会在无法 faithful 解析时放行**。
 
+## 文档分层（v3.0.0 起）
+
+`SKILL.md` 只放**每轮都要用**的东西：`§0 硬约束`（每轮必读，上下文压缩后也要重新遵守）
+与 `§1 单次执行流程`（5 步，单轮闭环）。其余按需读：
+
+| 文件 | 内容 | 什么时候读 |
+|---|---|---|
+| `SKILL.md` | 硬约束 + 5 步流程 + 触发示例 | 每次触发都读 |
+| `references/rule-catalog.md` | 规则全表、平台档位差异、规则字段说明 | 不确定某条规则查什么/什么档位 |
+| `references/cli-reference.md` | CLI 参数全表、缝接层、基线、config、JSON schema | 需要组合参数或读 JSON 字段 |
+
+这样切分是为了让每次触发只读必要内容：v2.x 的 `SKILL.md` 把规则全表和参数表都塞在正文里，
+每次触发都要付这份 token，而真正需要反复遵守的硬约束反而容易被上下文压缩挤掉。
+
 ## 快速开始
 
 ```bash
