@@ -60,7 +60,7 @@ GATE_DISCLAIMER = (
     "免责声明：本门禁仅做本地规范预检，不构成 SkillHub 审核保证。"
     "最终能否上架由 SkillHub 三线审核决定，责任由开发者自行承担。"
 )
-GATE_VERSION = "2.1.0"
+GATE_VERSION = "2.1.1"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -188,6 +188,10 @@ class SkillHubGate:
                 self.spec, self.rules, config or {}, strict=strict)
         except config_loader.ConfigError as exc:
             raise GateConfigError(str(exc)) from exc
+        # 扫描期缓存，见 _read / _iter_skill_files 的说明（对抗式审查 S1：修复前
+        # 600 个文件要跑 80 秒，_read 被调 56184 次、_io.open 占 49 秒）
+        self._file_cache: dict = {}
+        self._files_cache: list = []
 
     # ── 规则加载 ──
 
@@ -222,7 +226,37 @@ class SkillHubGate:
             "clause": clause,
         })
 
+    def _prime_caches(self):
+        """一次性把文件清单与全部文本读进内存。
+
+        为什么需要（对抗式审查 S1）：修复前 `check_rules` 在「pattern × target × 行」
+        三层循环里反复调 `_read`，135 个 pattern × 600 个文件 = 81000 次文件重开，
+        cProfile 显示 `_io.open` 独占 49 秒、整轮 80 秒。门禁是发布前要等的东西，
+        这个量级不可接受。
+
+        代价：把目标目录全部文本驻留内存。skill 目录正常几 MB，可接受；
+        超大目录（>5000 文件 / >100MB）已在 BUNDLE-001 里被判 BLOCKED，
+        不构成「为了过门禁先吃掉内存」的路径。
+        """
+        self._files_cache = list(self._walk_skill_files())
+        cache = self._file_cache
+        for rel, ap in self._files_cache:
+            try:
+                with open(ap, "r", encoding="utf-8", errors="replace") as f:
+                    cache[rel] = f.readlines()
+            except OSError:
+                cache[rel] = []
+
     def _read(self, *parts):
+        """读文件为行列表。命中扫描期缓存，不重复开文件。
+
+        缓存键用 target_dir 相对路径（即 `rel`）——所有调用点传的都是相对路径，
+        统一在这里 join 一次；绝对路径调用点不存在，若将来有，键会不同但仍
+        退化成一次真实打开，不会算错内容。
+        """
+        rel = "/".join(parts)
+        if rel in self._file_cache:
+            return self._file_cache[rel]
         path = os.path.join(self.target_dir, *parts)
         if not os.path.isfile(path):
             return []
@@ -252,8 +286,8 @@ class SkillHubGate:
             pass
         return None
 
-    def _iter_skill_files(self):
-        """产出 (relative_path, abs_path) 供扫描，剔除 .git。
+    def _walk_skill_files(self):
+        """实际遍历磁盘，产出 (relative_path, abs_path)，剔除 .git。
         若 use_git 且仓库可用，则只扫 git 跟踪集（等价 CI / 发布所见）。"""
         if self._git_files is not None:
             for ap in self._git_files:
@@ -269,6 +303,13 @@ class SkillHubGate:
                 ap = os.path.join(root, fn)
                 rel = os.path.relpath(ap, self.target_dir).replace("\\", "/")
                 yield rel, ap
+
+    def _iter_skill_files(self):
+        """产出 (relative_path, abs_path)。扫描期返回缓存副本，避免每个检查项
+        都重走一次 os.walk（v2.1.0 之前有 4 处各自遍历一遍）。"""
+        if not self._files_cache:
+            self._prime_caches()
+        return iter(self._files_cache)
 
     # ── 检查 1：frontmatter YAML 合法性（faithful parse）──
 
@@ -1093,6 +1134,9 @@ class SkillHubGate:
     # ── 运行全部 ──
 
     def run_all(self, show_info=False):
+        # 扫描前一次性填充缓存：文件清单 + 全部文本。放在最前面是因为
+        # check_frontmatter_validity 之后的每个检查项都要读文件。
+        self._prime_caches()
         # 回灌闭环：加载 feedback.json（白名单静音 + learned 规则）
         fb = load_feedback()
         self.whitelist_res = _feedback_res(fb, "whitelist")
@@ -1146,9 +1190,23 @@ class SkillHubGate:
         self.info_hits.extend(suppressed)
         return len(suppressed)
 
-    def write_baseline(self, path: str) -> int:
-        """把当前全部 issue 的指纹写成基线，返回条数。"""
-        return sarif_io.save_baseline(path, self.issues, self.verdict()["verdict"])
+    def write_baseline(self, path: str) -> dict:
+        """把当前 issue 的指纹写成基线。
+
+        **只写非 blocker 项**（对抗式审查 B2）。基线的语义是「我确认过这些是误报」，
+        把 critical 也写进去等于让「确认误报」这个动作变成「静音真问题」——
+        实测 2 条凭据泄漏写入基线后复跑直接 PASS。
+        对阻断项来说，「先发布再修」不是正确用法：门禁报了就该修或走 --learn whitelist
+        单条豁免（那会留下理由与时间戳，可追溯）。
+
+        返回 {"written": n, "skipped_blockers": m, "verdict": v} 供调用方回显。
+        """
+        blockable = [i for i in self.issues if i["severity"] in BLOCKER_SEVERITIES]
+        suppressible = [i for i in self.issues if i["severity"] not in BLOCKER_SEVERITIES]
+        written = sarif_io.save_baseline(
+            path, suppressible, self.verdict()["verdict"], skipped=len(blockable))
+        return {"written": written, "skipped_blockers": len(blockable),
+                "verdict": self.verdict()["verdict"]}
 
     # ── 判定 ──
 
@@ -1499,13 +1557,26 @@ def cmd_check(args):
         if deep["issues"]:
             gate.merge_external(deep["issues"])
         notes += deep["notes"]
+    if args.baseline and args.write_baseline:
+        # 这两个参数同开会「读进来再写回去」，实测把基线清空（对抗式审查 B3）：
+        # write 的是 suppress 之后的列表，被抑制的项已经不在里面了。
+        # 语义上这俩也不该共存于一次调用——读基线是「用它筛」，写基线是「重新定义它」。
+        print("❌ --baseline 与 --write-baseline 不能同开："
+              "先抑制再写入会把基线清空（写进去的是已过滤后的列表）。"
+              "请分两次跑。", file=sys.stderr)
+        sys.exit(2)
+
     if args.baseline:
         n = gate.suppress_baseline(args.baseline)
         notes.append(f"基线抑制 {n} 条" if n else "基线为空或无命中")
 
     if args.write_baseline:
-        n = gate.write_baseline(args.write_baseline)
-        notes.append(f"已写入基线 {n} 条指纹 → {args.write_baseline}")
+        result = gate.write_baseline(args.write_baseline)
+        notes.append(f"已写入基线 {result['written']} 条指纹 → {args.write_baseline}")
+        if result["skipped_blockers"]:
+            notes.append(
+                f"已跳过 {result['skipped_blockers']} 条 blocker（critical/high 不入基线）。"
+                "阻断项请修掉，或用 --learn whitelist 单条豁免以留下可追溯记录。")
 
     out = gate.report(fmt=args.format, output_path=args.output)
     if notes and args.format == "text":

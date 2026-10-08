@@ -340,17 +340,25 @@ def load_baseline(path: str) -> set:
     return {e for e in entries if isinstance(e, str) and _FINGERPRINT_RE.match(e)}
 
 
-def save_baseline(path: str, issues: list, verdict: str = "") -> int:
-    """把当前 issue 的指纹写成基线文件，返回写入条数。"""
+def save_baseline(path: str, issues: list, verdict: str = "", skipped: int = 0) -> int:
+    """把 issue 的指纹写成基线文件，返回写入条数。
+
+    `skipped` 是被调用方挡在外面的 blocker 数量——写进文件是为了让基线**自证**：
+    半年后有人翻到这个文件时，能看到「当时有 3 条 blocker 没被写进来」，
+    而不是误以为基线已经涵盖了全部问题。
+    """
     fingerprints = sorted({issue_fingerprint(i) for i in issues})
     payload = {
         "tool": TOOL_NAME,
+        "schema": 1,
         "generated_from_verdict": verdict,
+        "skipped_blockers": skipped,
         "fingerprints": fingerprints,
     }
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+        f.write("\n")
     return len(fingerprints)
 
 

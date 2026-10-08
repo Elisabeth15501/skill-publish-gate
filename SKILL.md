@@ -1,7 +1,7 @@
 ---
 name: skill-publish-gate
 slug: skill-publish-gate
-version: 2.1.0
+version: 2.1.1
 displayName: Skill 发布门禁（代码安全 + 平台规范）
 summary: 发布 Skill 前本地跑一遍，一次看全「代码安全」与「SkillHub/ClawHub/ima 平台规范」，命中即阻断
 tags: [skill, 发布门禁, 合规预检, 代码安全, preflight, 上架检查, skillhub, clawhub, ima, sarif, publish-gate]
