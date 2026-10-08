@@ -60,7 +60,7 @@ GATE_DISCLAIMER = (
     "免责声明：本门禁仅做本地规范预检，不构成 SkillHub 审核保证。"
     "最终能否上架由 SkillHub 三线审核决定，责任由开发者自行承担。"
 )
-GATE_VERSION = "2.2.0"
+GATE_VERSION = "2.2.1"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1176,19 +1176,22 @@ class SkillHubGate:
         return {"added": len(issues), "before": before,
                 "after": len(self.issues), "deduped": len(dropped)}
 
-    def suppress_baseline(self, path: str) -> int:
-        """套用基线文件：命中项降为 info，返回被抑制条数。
+    def suppress_baseline(self, path: str) -> dict:
+        """套用基线文件：命中项降为 info。
 
         刻意不叫 apply_baseline：sarif_io 里已有一个 apply_baseline(issues, baseline)
         返回拆分结果，同名不同签名会让 IDE 补全把两者混起来（clean code 审计 B1）。
         「读文件」这步在这里，「怎么拆」在模块里。
+
+        返回 {"suppressed": n, "note": str}：note 非空说明基线是旧版格式、
+        已整体失配，用户需要重建——否则会看到「误报又回来了」而不知原因。
         """
-        baseline = sarif_io.load_baseline(path)
+        baseline, note = sarif_io.load_baseline(path)
         if not baseline:
-            return 0
+            return {"suppressed": 0, "note": note}
         self.issues, suppressed = sarif_io.apply_baseline(self.issues, baseline)
         self.info_hits.extend(suppressed)
-        return len(suppressed)
+        return {"suppressed": len(suppressed), "note": note}
 
     def write_baseline(self, path: str) -> dict:
         """把当前 issue 的指纹写成基线。
@@ -1360,10 +1363,23 @@ def load_feedback():
 
 
 def save_feedback(data):
-    # 末尾补换行：POSIX 文本文件惯例，也让 git diff 不再报 "No newline at end of file"
-    with open(FEEDBACK_PATH, "w", encoding="utf-8", newline="") as f:
+    """原子写回 rules/feedback.json（对抗式审查 M3）。
+
+    原实现是 `open(path, "w")` 直接截断重写，两个风险：
+      1. **并发丢数据** —— 两个 --learn 同时跑，后写的覆盖先写的；
+      2. **读到半截文件** —— 另一个进程在写入中途 json.load，会解析失败；
+         load_feedback 对失败返回空结构，于是「回灌记录凭空消失」且无任何提示。
+
+    改成「写同目录临时文件 + os.replace 原子替换」：replace 在同一文件系统内是
+    原子操作，读者要么看到旧内容、要么看到新内容，不存在中间态。
+    临时文件必须与目标同目录，跨文件系统的 os.replace 会失败。
+    """
+    os.makedirs(os.path.dirname(FEEDBACK_PATH) or ".", exist_ok=True)
+    tmp = FEEDBACK_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+        f.write("\n")  # POSIX 文本文件惯例，也让 git diff 不再报 no newline at EOF
+    os.replace(tmp, FEEDBACK_PATH)
 
 
 def learn(entry):
@@ -1544,6 +1560,17 @@ def cmd_check(args):
         sys.exit(0)
 
     config = config_loader.load_config(args.config) if args.config else {}
+
+    # --dir 必须是已存在的目录（对抗式审查 M4）。此前不存在时会把相对路径接到
+    # cwd 后面，于是 `--dir /nonexistent/path` 变成「C:\Program Files\...\nonexistent\path」，
+    # skill 名取 basename 成了 "path" —— 用户会以为门禁审了一个叫 path 的 skill，
+    # 还拿到了一个看似正常的 JSON 报告。拼错路径后静默审别的东西，比报错坏得多。
+    if not os.path.isdir(args.dir):
+        resolved = os.path.abspath(args.dir)
+        kind = "不是目录" if os.path.exists(resolved) else "不存在"
+        print(f"❌ --dir {kind}：{resolved}", file=sys.stderr)
+        sys.exit(2)
+
     try:
         platform = resolve_platform(args.platform, config.get("platform"))
     except GateConfigError as exc:
@@ -1597,8 +1624,11 @@ def cmd_check(args):
         sys.exit(2)
 
     if args.baseline:
-        n = gate.suppress_baseline(args.baseline)
-        notes.append(f"基线抑制 {n} 条" if n else "基线为空或无命中")
+        result = gate.suppress_baseline(args.baseline)
+        notes.append(f"基线抑制 {result['suppressed']} 条" if result["suppressed"]
+                     else "基线为空或无命中")
+        if result["note"]:
+            notes.append(result["note"])
 
     if args.write_baseline:
         result = gate.write_baseline(args.write_baseline)

@@ -77,38 +77,121 @@ _LEVEL_TO_SEVERITY = {
 
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{16}$")
 
+# 来源前缀：本门禁给外部 finding 的 rule_id 加的标记，形如 "L2-SARIF-RULE-001"。
+# 只用于展示与归类，**不进指纹**（见 issue_fingerprint 的说明）。
+_SOURCE_PREFIX_RE = re.compile(r"^(?:L\d+|EXT)-", re.I)
+
+# 基线文件格式版本。2 = 指纹不再含行号（对抗式审查 M1）。旧版读入时会失配并给提示。
+BASELINE_SCHEMA = 2
+
 
 # ═══════════════════════════════════════════════════════════════
 #  指纹
 # ═══════════════════════════════════════════════════════════════
 
-def fingerprint(rule_id, file, line, title="") -> str:
+def fingerprint(rule_id, file, line=None, title="", occurrence=None) -> str:
     """返回跨工具可比对的指纹键。
 
     取前 16 位十六进制（64 bit）而非全长：指纹只用于去重与基线匹配，不是
     安全边界，碰撞概率在单仓规模下可忽略；短键让 baseline.json 保持可读。
+
+    **不把行号计入指纹**（对抗式审查 M1）。原因：行号是最易变的字段——在文件开头
+    加一行注释，后面所有 finding 的行号都平移，整份基线当场失效，基线也就失去了意义。
+    基线的用途是「记住我确认过这些是误报」，而人记住的是「哪个文件的哪条规则」，
+    不是「第几行」。
+
+    但**同一文件同一规则可能命中多处**（例如 requirements.txt 里三行都没钉版）。
+    直接去掉行号会把它们折叠成一条，导致「报 3 条」变成「报 1 条」，那是漏报。
+    所以由调用方传入 `occurrence`（同一 文件+规则 下的第几次命中，从 0 开始），
+    它的稳定性远好于行号：改别的行不会影响它，只有增删同规则的命中才会变。
+
+    兼容性：旧指纹（含行号）不再匹配，load_baseline 会据此提示重建基线。
     """
     key = "|".join([
         str(rule_id or ""),
         str(file or ""),
-        str(line if line is not None else 0),
+        "" if occurrence is None else str(occurrence),
         str(title or rule_id or ""),
     ])
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
-def issue_fingerprint(issue: dict) -> str:
+def issue_fingerprint(issue: dict, occurrence=None) -> str:
     """从 gate 的 issue 字典取指纹。
 
-    指纹不含 `found`（命中原文）：同一位置的同一规则即使措辞微调，指纹也应稳定，
-    否则每改一次文案就要重建一次基线。
+    指纹不含 `found`（命中原文）与 `line`（对抗式审查 M1：行号最易变，
+    在文件开头加一行注释就会让整份基线失效）。
+    `occurrence` 由调用方按「同一 文件+规则 下的第几次命中」传入，
+    见 fingerprint() 的 docstring 说明为什么需要它。
+
+    **rule_id 取去掉来源前缀的原值**（对抗式审查 P1-7 / G4）。L2 的 rule_id 会被
+    加上 `L2-` 前缀以区分来源，若指纹用带前缀的值，L0 与 L2 报同一件事就永远
+    折叠不掉——「跨工具去重」会变成一句空话。前缀只用于展示与字典归类，不进指纹。
     """
+    raw_rule_id = _strip_source_prefix(issue.get("rule_id", ""))
     return fingerprint(
-        issue.get("rule_id", ""),
+        raw_rule_id,
         issue.get("file", ""),
-        issue.get("line", 0),
-        issue.get("title", ""),
+        occurrence=occurrence,
+        title=issue.get("title", ""),
     )
+
+
+def issue_identity(issue: dict) -> str:
+    """问题的「身份键」：文件 + 规则，**不含来源前缀、不含行号、不含 occurrence**。
+
+    这是跨工具去重真正该用的键。L0 报 FORB-001@a.md:3、L2 报同一件事时，
+    两者身份键相同 → 折叠成一条；而同一来源在同一文件报两次（两条未钉版的依赖）
+    身份键也相同——**所以它不能单独用于去重**，必须配合 occurrence 区分「同一来源
+    的多次命中」（见 dedupe 的两阶段实现）。
+    """
+    return sarif_io_key(issue.get("file", ""),
+                        _strip_source_prefix(issue.get("rule_id", "")),
+                        issue.get("title", ""))
+
+
+def sarif_io_key(file: str, rule_id: str, title: str) -> str:
+    """身份键的底层实现：sha256(file | 原始rule_id | title)[:16]。
+
+    与 fingerprint() 的差别正是「不含 occurrence」——这是跨工具去重需要的那个键。
+    放在模块级而非内联，是为了让测试能直接验证键本身。
+    """
+    key = "|".join([str(file or ""), str(rule_id or ""), str(title or rule_id or "")])
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def _strip_source_prefix(rule_id: str) -> str:
+    """去掉来源前缀（L2- / EXT- 等），还原成外部工具的原始 ruleId。
+
+    前缀是本门禁加的展示用标记，不属于「问题身份」的一部分。
+    """
+    return _SOURCE_PREFIX_RE.sub("", rule_id or "")
+
+
+def assign_occurrences(issues: list) -> list:
+    """给每条 issue 标注它是自己 (file, 原始rule_id) 下的第几次命中。
+
+    原地追加 `occurrence` 字段并返回原列表。**必须在所有指纹计算之前调用**。
+
+    分组键 = (file, 剥离来源前缀后的 rule_id)。为什么前缀要剥：
+      L0 报了一条 FORB-001，外部扫描器对**同一位置**也报了一条（L2-FORB-001），
+      它们是同一件事，dedupe 应折叠成一条。若按带前缀的 rule_id 分组，
+      两者会被当成两个不同的问题各自计数，指纹永不相同，去重就是空话。
+
+    同一来源自己在同一文件报两次（requirements.txt 两行都没钉版）仍靠 occurrence
+    递增区分，不会被误折叠——实测这正是「不能简单去掉 occurrence」的原因。
+
+    注意 dedupe 的折叠判据是「身份键 + 行号」而非指纹本身：指纹为基线设计（抗行号
+    漂移），而精确去重要的就是「同一行才算同一条」。两条路径用途不同，别混用。
+    """
+    counters: dict = {}
+    for issue in sorted(issues, key=lambda i: (i.get("file", ""), i.get("line", 0),
+                                               _strip_source_prefix(i.get("rule_id", "")))):
+        key = (issue.get("file", ""), _strip_source_prefix(issue.get("rule_id", "")))
+        idx = counters.get(key, 0)
+        issue["occurrence"] = idx
+        counters[key] = idx + 1
+    return issues
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -323,34 +406,58 @@ def _severity_of(result: dict, meta: dict) -> str:
 # ═══════════════════════════════════════════════════════════════
 
 def dedupe(issues: list) -> tuple:
-    """按指纹折叠重复项，返回 (保留项, 被折叠项)。
+    """折叠重复项，返回 (保留项, 被折叠项)。
 
-    「保留」取第一条：调用方按 L0 → L2 顺序追加，本门禁自己的结论天然排在前面，
+    判据是「身份键 + 行号」：`身份键 = file + 原始 rule_id`（不含来源前缀），
+    再加上行号一起构成「同一个问题的同一个位置」。
+
+    为什么这个判据能同时满足两个相反的要求（对抗式审查 P1-7 / G4 / M1）：
+      · L0 报 FORB-001@a.md:3，外部扫描器报 L2-FORB-001@a.md:3 → 剥前缀后身份键相同、
+        行号相同 → 折叠。**跨工具去重真正生效。**
+      · 同一来源在同一文件报三次（requirements.txt 三行都没钉版）→ 身份键相同但
+        行号各不相同 → 三条都保留。**同文件多行不会被误折叠成一条。**
+      · 行号漂移（文件开头插一行）不影响基线，因为基线走的是不含行号的指纹
+        （见 M1 与 apply_baseline），与这里的「精确去重」是两条不同的路径。
+
+    「保留」取先到的那条：调用方按 L0 → L2 顺序追加，本门禁自己的结论天然排在前面，
     冲突时以本门禁为准。
     """
+    assign_occurrences(issues)
     kept, dropped, seen = [], [], set()
     for issue in issues:
-        fp = issue_fingerprint(issue)
-        if fp in seen:
+        key = (issue_identity(issue), issue.get("line"))
+        if key in seen:
             dropped.append(issue)
             continue
-        seen.add(fp)
+        seen.add(key)
         kept.append(issue)
     return kept, dropped
 
 
-def load_baseline(path: str) -> set:
-    """读 baseline 文件，返回指纹集合。文件不存在 = 空基线（首次运行属正常）。"""
+def load_baseline(path: str) -> tuple:
+    """读基线文件，返回 (指纹集合, 提示信息)。
+
+    文件不存在 = 空基线（首次运行属正常）。**旧版 schema 1 的基线（指纹含行号）
+    会全部失配**，所以额外返回一句提示，让用户知道「基线失效」是重算口径造成的，
+    而不是「误报又回来了」。
+    """
+    empty = (set(), "")
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError):
-        return set()
+        return empty
     entries = data.get("fingerprints") if isinstance(data, dict) else data
     if not isinstance(entries, list):
-        return set()
+        return empty
     # 只认真指纹：手工往 baseline 里塞别的字符串会让「抑制」变成万能豁免口
-    return {e for e in entries if isinstance(e, str) and _FINGERPRINT_RE.match(e)}
+    valid = {e for e in entries if isinstance(e, str) and _FINGERPRINT_RE.match(e)}
+    note = ""
+    if isinstance(data, dict) and data.get("schema", 1) < BASELINE_SCHEMA:
+        note = (f"基线文件是旧版 schema（指纹含行号），已不兼容——"
+                f"行号变动会使基线整体失效（对抗式审查 M1）。"
+                f"请用 --write-baseline 重建。")
+    return valid, note
 
 
 def save_baseline(path: str, issues: list, verdict: str = "", skipped: int = 0) -> int:
@@ -360,10 +467,11 @@ def save_baseline(path: str, issues: list, verdict: str = "", skipped: int = 0) 
     半年后有人翻到这个文件时，能看到「当时有 3 条 blocker 没被写进来」，
     而不是误以为基线已经涵盖了全部问题。
     """
-    fingerprints = sorted({issue_fingerprint(i) for i in issues})
+    assign_occurrences(issues)
+    fingerprints = sorted({issue_fingerprint(i, i.get("occurrence")) for i in issues})
     payload = {
         "tool": TOOL_NAME,
-        "schema": 1,
+        "schema": BASELINE_SCHEMA,
         "generated_from_verdict": verdict,
         "skipped_blockers": skipped,
         "fingerprints": fingerprints,
@@ -384,9 +492,11 @@ def apply_baseline(issues: list, baseline: set) -> tuple:
     """
     if not baseline:
         return issues, []
+    assign_occurrences(issues)
     kept, suppressed = [], []
     for issue in issues:
-        if issue_fingerprint(issue) not in baseline:
+        fp = issue_fingerprint(issue, issue.get("occurrence"))
+        if fp not in baseline:
             kept.append(issue)
         else:
             suppressed.append({
@@ -401,6 +511,6 @@ def apply_baseline(issues: list, baseline: set) -> tuple:
                 "redline": False,
                 "authority_type": issue.get("authority_type", ""),
                 "clause": issue.get("clause", ""),
-                "fingerprint": issue_fingerprint(issue),
+                "fingerprint": fp,
             })
     return kept, suppressed

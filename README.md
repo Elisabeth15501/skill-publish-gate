@@ -184,6 +184,19 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 3. **降级而非绕行**：海外源不可达就降级到国内源 + 离线快照 + 如实标注。
 4. **默认零出网**：不带 `--deep-scan` 时不发起任何网络请求、不读任何环境变量、不需要任何密钥。
 
+## 跑测试
+
+```bash
+python tests/run_all.py          # 全部（约 80 秒）
+python tests/test_modules.py     # 单元测试
+python tests/test_p0_verify.py   # 对抗式审查里那三个攻击的原样重打
+```
+
+测试全部用相对路径定位，可在任意机器 clone 后直接跑，无外部依赖（PyYAML 除外）。
+`test_p0_verify.py` 是对抗式审查的回归防线——**它把当初真实打中过的攻击原样重放**，
+不是重写等价用例；改动 `--config` / `--baseline` / `--platform` / SARIF 相关逻辑前，
+请先跑它。
+
 ## 贡献
 
 PR 欢迎。技能是给 Agent 的任务说明书，改动建议聚焦一处痛点、附带真实触发样例与预期输出。
