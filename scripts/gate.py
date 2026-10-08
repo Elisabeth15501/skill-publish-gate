@@ -60,7 +60,7 @@ GATE_DISCLAIMER = (
     "免责声明：本门禁仅做本地规范预检，不构成 SkillHub 审核保证。"
     "最终能否上架由 SkillHub 三线审核决定，责任由开发者自行承担。"
 )
-GATE_VERSION = "2.1.1"
+GATE_VERSION = "2.2.0"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1502,6 +1502,32 @@ def load_external_sarif(path: str, trusted: bool) -> list:
     return sarif_io.from_sarif(doc, trusted=trusted, source="l2")
 
 
+# 合法平台取值。与 rules/skillhub-spec.json 的 platform_profiles 键一一对应。
+# 刻意用「运行时校验」而不是 argparse 的 choices：v2.1.0 需要支持从 --config 读
+# platform，而 argparse 只能校验命令行传进来的值（对抗式审查 S6）。
+PLATFORMS = ("skillhub", "github", "clawhub", "ima")
+DEFAULT_PLATFORM = "skillhub"
+
+
+def resolve_platform(cli_value, config_value) -> str:
+    """定出最终平台：命令行 > 配置文件 > 默认，并**校验拼写**。
+
+    v2.1.0 之前 argparse 上有 choices，拼错会被 argparse 拦下；为了支持从 --config
+    读 platform 时我把 choices 一起去掉了，却没补回校验——后果是 `--platform clahub`
+    静默按 skillhub 跑完，用户以为按 ClawHub 口径审过了。**这类「拼错照跑」的失败
+    比报错更坏**，所以校验必须放在解析之后、构造 gate 之前。
+    """
+    platform = cli_value or config_value or DEFAULT_PLATFORM
+    if platform not in PLATFORMS:
+        source = "--platform" if cli_value else ("--config 的 platform" if config_value
+                                                 else "默认值")
+        raise GateConfigError(
+            f"未知平台 {platform!r}（来自 {source}）。合法取值：{' / '.join(PLATFORMS)}。"
+            "注意 ClawHub 是 clawhub（不带大写），腾讯 ima 是 ima。"
+        )
+    return platform
+
+
 def cmd_check(args):
     # 回灌模式：写完即退出（不扫描）
     if args.learn is not None:
@@ -1518,11 +1544,15 @@ def cmd_check(args):
         sys.exit(0)
 
     config = config_loader.load_config(args.config) if args.config else {}
-    platform = args.platform or config.get("platform") or "skillhub"
+    try:
+        platform = resolve_platform(args.platform, config.get("platform"))
+    except GateConfigError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        sys.exit(2)
 
     if args.offline and args.deep_scan:
-        print("❌ --offline 与 --deep-scan 互斥：离线模式下禁止执行外部命令"
-              "（这是防源码外传的硬开关，不是建议）")
+        print("❌ --offline 与 --deep-scan 互斥：离线模式下禁止外部命令"
+              "（这是防源码外传的硬开关，不是建议）", file=sys.stderr)
         sys.exit(2)
 
     try:
@@ -1592,6 +1622,12 @@ def cmd_check(args):
 
 
 def cmd_dirs(args):
+    # 与 check 走同一套校验：批量体检最忌「拼错平台、整批按错口径跑完还照样出表」
+    try:
+        platform = resolve_platform(args.platform, None)
+    except GateConfigError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        sys.exit(2)
     base = args.dir
     dirs = args.dirs or []
     if not dirs:
@@ -1602,7 +1638,7 @@ def cmd_dirs(args):
                 dirs.append(sd)
     rows = []
     for d in dirs:
-        g = SkillHubGate(d, platform=args.platform)
+        g = SkillHubGate(d, platform=platform)
         g.run_all()
         v = g.verdict()
         rows.append((g.skill_name, v))

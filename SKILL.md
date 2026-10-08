@@ -1,7 +1,7 @@
 ---
 name: skill-publish-gate
 slug: skill-publish-gate
-version: 2.1.1
+version: 2.2.0
 displayName: Skill 发布门禁（代码安全 + 平台规范）
 summary: 发布 Skill 前本地跑一遍，一次看全「代码安全」与「SkillHub/ClawHub/ima 平台规范」，命中即阻断
 tags: [skill, 发布门禁, 合规预检, 代码安全, preflight, 上架检查, skillhub, clawhub, ima, sarif, publish-gate]
@@ -109,7 +109,7 @@ SkillHub、ClawHub、腾讯 ima 还是先开源到 GitHub。
   Codex Security 的职责。本门禁是**发布包级别的轻量体检**，刻意不做工业级深层分析——
   它要的是「发布前 5 秒看出会不会被拒/下架」，不是把代码审穿。
   但 v2.1.0 起这层**可以缝进来**：`--sarif-in` 吃外部 SARIF、`--deep-scan` 直接调外部扫描器，
-  结果并入同一个 verdict（自动降一级）。也就是说「谁做深度分析」可以换，「谁来判能不能发」
+  结果并入同一个 verdict（**L2 档位封顶 medium，不阻断**）。也就是说「谁做深度分析」可以换，「谁来判能不能发」
   不换。
 - **国内监管合规审计报告**（金融/广告法/隐私法律依据文书）：那是 `skill-compliance-check` 的职责。
 - **把门禁结论当审核保证**：最终能否上架由各平台审核决定（见底部免责声明）。
@@ -219,7 +219,8 @@ python scripts/gate.py check --dir <skill目录> --format sarif -o gate.sarif
 
 # ② 导入外部扫描器的 SARIF（domsec / SkillSpector / Codex Security 都吃）
 python scripts/gate.py check --dir <skill目录> --sarif-in domsec.sarif
-#   外部 finding 一律降一级（critical→high），且一律不带 redline；
+#   外部 finding 档位封顶 medium（error→medium、warning→low），且一律不带 redline，
+#   所以 L2 永远不能单独把一个 skill 判成 BLOCKED；
 #   已过验证层的工具可加 --sarif-trusted 恢复原始档位
 
 # ③ 直接调外部扫描器（不经 shell，失败不影响 L0 判定）

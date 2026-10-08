@@ -62,7 +62,7 @@ python scripts/gate.py check --dir <skill目录> --platform ima
 # 产出 SARIF 2.1.0（喂 GitHub Code Scanning）
 python scripts/gate.py check --dir <skill目录> --format sarif -o gate.sarif
 
-# 导入外部深度扫描器的 SARIF（finding 自动降一级后并入判定）
+# 导入外部深度扫描器的 SARIF（finding 封顶 medium 后并入判定，不阻断）
 python scripts/gate.py check --dir <skill目录> --sarif-in domsec.sarif
 
 # 直接调外部扫描器（不经 shell；失败不影响本地判定；{dir} = 目标目录）
@@ -168,7 +168,8 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 
 两条不变量：
 
-1. **外部 finding 一律降一级**（critical→high），且不带 redline。依据是 LLM 语义层实测精度约
+1. **外部 finding 档位封顶 medium**（error→medium、warning→low），且不带 redline —— 所以深度层
+   永远不能单独决定能不能发。依据是 LLM 语义层实测精度约
    87%——把它的 critical 直接当 BLOCKER 会被误报轰炸，用户随后只会把工具关掉。
    已过验证层的工具可加 `--sarif-trusted` 恢复原始档位。
 2. **深度层失败绝不影响本地判定**。扫描器挂掉、超时、输出不合法，都只记一条日志。

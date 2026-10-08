@@ -48,10 +48,21 @@ _SEVERITY_TO_LEVEL = {
     "low": "note",
 }
 
-# L2 降级表：降一级。未知严重度落到 low（最弱），避免外来数据伪造 blocker。
+# L2 降级表：外部 finding 的档位**封顶 medium**（对抗式审查 S2）。
+#
+# 为什么不是「降一级」：降一级是 critical→high，而 high 仍在 BLOCKER_SEVERITIES 里，
+# 实测 level=error 的外部 finding 照样 BLOCKED exit 1 —— 与 SKILL.md / README /
+# CHANGELOG 三处「L2 一律降一级且不阻断」的承诺直接矛盾。
+#
+# 真正的设计意图是「深度层只能提供线索，不能单独决定发布与否」：
+# LLM 语义层实测精度约 87%，把它的判断直接当 BLOCKER 会被误报轰炸，
+# 用户随后只会把工具关掉 —— 那才是更糟的结局。
+# medium 是 NEEDS_FIX：会出现在报告里、会让 verdict 变黄，但不阻断。
+# 只有调用方显式声明该工具的 finding 已过验证层（--sarif-trusted），
+# 才恢复 SARIF level 映射出来的原始档位。
 _L2_DOWNGRADE = {
-    "critical": "high",
-    "high": "medium",
+    "critical": "medium",
+    "high": "low",
     "medium": "low",
     "low": "low",
 }
@@ -226,7 +237,9 @@ def from_sarif(doc: dict, trusted: bool = False, source: str = "l2") -> list:
     不抛异常。理由是「外部工具的输出不该让门禁崩掉」——崩了就等于逼用户关掉
     --sarif-in，而不是去修对方的输出。
 
-    trusted=True 表示调用方已确认该工具的 finding 过验证层，此时不降级。
+    trusted=True 表示调用方已确认该工具的 finding 过验证层，此时**不封顶**、
+    恢复原始档位。未信任时一律封顶 medium（见 _L2_DOWNGRADE 的说明），
+    所以 L2 永远不能单独把一个 skill 判成 BLOCKED。
     """
     issues = []
     if not looks_like_sarif(doc):

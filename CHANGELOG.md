@@ -1,3 +1,56 @@
+## [2.2.0] — 2026-10-08
+
+**这一版关掉对抗式审查里剩下的两个严重项（S2 / S6）。**
+3 个阻断与 4 个严重（S1 性能 / S3 `--strict` / S4 `level=info` / S5 ReDoS）已在 v2.1.1 关闭。
+
+### S2 · L2 finding 档位封顶 medium，深度层不再有阻断权（严重）
+
+**漏洞**：SKILL.md / README / CHANGELOG 三处都写「外部 finding 一律降一级且不阻断」，
+但 `_L2_DOWNGRADE` 是 `critical → high`，而 `high` 仍在 `BLOCKER_SEVERITIES` 里。
+实测 `level=error` 的外部 finding 照样 `BLOCKED exit 1`——**文档承诺了一件假的事**。
+
+**修法**：降级表改为**封顶 medium**（error→medium、warning→low、note→low），
+`--sarif-trusted` 是唯一例外（调用方声明该工具的 finding 已过验证层时恢复原档）。
+
+设计意图写进了代码注释：**深度层只能提供线索，不能单独决定发布与否**。
+LLM 语义层实测精度约 87%，把它的判断直接当 BLOCKER 会被误报轰炸，
+用户随后只会把工具关掉——那才是更糟的结局。medium 是 NEEDS_FIX：
+出现在报告里、让 verdict 变黄，但不阻断。
+
+四档实测：`error → medium` / `warning → low` / `note → low`，verdict 均为 `NEEDS_FIX exit 2`；
+`--sarif-trusted` 才回到 `critical` / `BLOCKED exit 1`。
+
+### S6 · `--platform` 恢复白名单校验（严重）
+
+**漏洞**：v2.1.0 为支持从 `--config` 读 platform，把 argparse 的 `choices` 一起去掉却没补回校验。
+后果是 `--platform clahub` 静默按 skillhub 跑完并正常出报告——
+**用户以为按 ClawHub 口径审过了，实际没有**。这类「拼错照跑」的失败比报错更坏。
+
+**修法**：新增 `PLATFORMS` + `resolve_platform()`，在**解析之后、构造 gate 之前**校验：
+
+- 优先级：命令行 > `--config` 的 platform > 默认 `skillhub`
+- 非法值 exit 2，报错列出四个合法取值，并提示「ClawHub 是 `clawhub` 不带大写」
+- `dirs` 子命令走同一套校验（批量体检最忌「拼错平台、整批按错口径跑完还照样出表」）
+- 报错走 **stderr**，保持 stdout 只有报告本体（`--format json` 可直接 pipe）
+
+### 验证
+
+- `_test_p0_verify.py` 扩展 13 条断言（3 原始攻击 + S2 六条 + S6 四条）
+- 模块单测 + 端到端补 L2 封顶与 trusted 例外断言
+- 三套共 124 项全绿；四平台零回归（BLOCKED(2) / PASS / NEEDS_FIX(2) / ima BLOCKED）
+- 性能未受影响（600 文件 2.9s）
+
+### 顺带修掉的两处测试自身缺陷
+
+- e2e 里 `--offline` 互斥断言查 stdout，但 v2.1.1 起错误信息统一走 stderr → 改为合并检查
+- 平台可用性断言绑定了 `exit in (0,2)`，而 `ima` 对不满足七字段的目标判 BLOCKED 是**正确行为**
+  → 改为只验「未被当成未知平台拒掉」
+
+**教训：测试断言写错时会伪装成代码缺陷。**这两处都不是代码问题，
+但如果直接改代码去迎合测试，就会把正确行为改坏。断言必须对齐**意图**而非**当前实现**。
+
+---
+
 ## [2.1.1] — 2026-10-08
 
 **这一版修的是 v2.1.0 的三个阻断级漏洞 + 一个性能问题，全部由「对抗式审查」发现。**
