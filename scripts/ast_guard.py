@@ -64,10 +64,10 @@ _DOTTED_CALLS = {
                       "改用 json 等数据格式。"),
     "os.system": ("high", "AST-OS-001",
                   "os.system 走 shell 解释，参数含用户输入即等于命令注入",
-                  "改用 subprocess.run([...]) 列表形式并传 shell=False。"),
+                  "改用 subprocess.run（列表形式）并传 shell=False。"),
     "os.popen": ("high", "AST-OS-001",
                  "os.popen 走 shell 解释，参数含用户输入即等于命令注入",
-                 "改用 subprocess.run([...]) 列表形式并传 shell=False。"),
+                 "改用 subprocess.run（列表形式）并传 shell=False。"),
 }
 
 _SHELL_TRUE_RE = re.compile(r"shell\s*=\s*True", re.I)
@@ -77,10 +77,12 @@ _SHELL_MODULES_RE = re.compile(r"^(subprocess|os|commands|popen2)\b")
 
 
 class GuardResult(dict):
-    """findings 列表 + note 列表的轻量容器。
+    """findings 列表 + note 列表的轻量容器，键名固定为 "findings" / "notes"。
 
-    用 dict 子类而非 tuple，是为了让 gate.py 侧读起来是 r["findings"] 而不是
-    「记得第一个返回什么、第二个是什么」——后者是审计必挑的点。
+    用 dict 子类而非 tuple，是因为调用方需要按名字取字段
+    （r["findings"] / r["notes"]），而不必记住返回值的顺序。
+    两个字段都可能为空列表：解析失败只产 note、不产 finding；
+    干净文件则两者皆空。
     """
 
 
@@ -108,7 +110,7 @@ def scan_source(text: str, rel_path: str) -> GuardResult:
         if not isinstance(node, ast.Call):
             continue
         line_no = getattr(node, "lineno", 1)
-        src = lines[line_no - 1].strip() if 0 < line_no <= len(lines) else ""
+        src = _call_source(node, text, lines)
         if not src or _ALLOW_COMMENT_RE.search(src):
             continue
         hit = _match_dangerous(_dotted(node.func), src)
@@ -122,6 +124,35 @@ def scan_source(text: str, rel_path: str) -> GuardResult:
     return GuardResult(findings=findings, notes=notes)
 
 
+def _call_source(node, text: str, lines: list) -> str:
+    """取一次调用的**完整**源码文本，含尾部注释。
+
+    为什么不能只取 `lines[node.lineno - 1]`：对抗式审查 G2 实测过一个真漏检——
+    `subprocess.run` 多行调用里 `shell=True` 在第 3 行，
+    只看 `lineno` 那一行拿到的是 `subprocess.run` 的首行，于是 `_SHELL_TRUE_RE` 永不命中，
+    **整条 AST-SHELL-001 规则对多行调用完全失效**（实测 0 条命中）。
+    格式化器与开发者都会把参数拆多行，所以这不是边角情况而是主路径。
+
+    为什么还要补尾部那一行：`ast.get_source_segment` 的行为**不对称**——
+    单行调用返回 `eval(x)`（不含尾部注释 `# noqa`），多行调用却会把末行的注释一起带上。
+    这个不对称用探针实测确认过。若只信 segment，单行写法的 `# noqa` 豁免会静默失效
+    （实测 `eval(x)  # noqa` 重新被报出）。豁免失效的方向恰好是「多报」，影响可控，
+    但既然多花一行就能确定，就不靠这种运气。
+    """
+    start = getattr(node, "lineno", 1) or 1
+    end = getattr(node, "end_lineno", None) or start
+    try:
+        segment = ast.get_source_segment(text, node)
+    except Exception:      # noqa: BLE001 —— 拿不到就回退，不让扫描因取文本而崩
+        segment = None
+    parts = [segment.strip()] if segment else []
+    tail = lines[end - 1].strip() if 0 < end <= len(lines) else ""
+    # segment 已含末行时不重复拼接
+    if tail and (not parts or tail not in parts[0]):
+        parts.append(tail)
+    return "\n".join(p for p in parts if p)
+
+
 def scan_file(abs_path: str, rel_path: str) -> GuardResult:
     """读文件并扫；读不到（权限/编码）只记 note。"""
     try:
@@ -133,16 +164,44 @@ def scan_file(abs_path: str, rel_path: str) -> GuardResult:
         ])
 
 
+def iter_python_files(target_dir: str) -> list:
+    """产出目标目录下全部 .py 的 (abs_path, rel_path)，跳过 .git 与封禁目录。
+
+    为什么不用 `os.listdir("scripts")`（对抗式审查 G1）：那口径只看 `scripts/` 顶层，
+    于是 `src/main.py` 与 `scripts/sub/x.py` 里的危险调用全漏——实测建了
+    `scripts/`、`src/`、`scripts/sub/` 三个目录各一个 `eval()`，只扫到 1/3。
+    而 gate 的文本类检查走的是全量遍历，**同一份代码里的两条检查项覆盖面不同**
+    会让人误以为「ast 兜底没报 = 那段代码没问题」。这里与 gate 对齐。
+
+    排除清单与 gate 的 forbidden 语义保持一致：编译产物与依赖目录不扫，
+    否则一次 `pip install` 就能让门禁去审第三方代码。
+    """
+    skip_dirs = {".git", "__pycache__", ".venv", "venv", "node_modules",
+                 ".workbuddy", ".mypy_cache", ".pytest_cache", "dist", "build",
+                 ".eggs", "site-packages"}
+    out = []
+    for root, dirs, files in os.walk(target_dir):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for name in sorted(files):
+            if not name.endswith(".py"):
+                continue
+            ap = os.path.join(root, name)
+            rel = os.path.relpath(ap, target_dir).replace("\\", "/")
+            out.append((ap, rel))
+    return out
+
+
 def scan_skill(target_dir: str) -> GuardResult:
-    """扫一个 skill 目录下 scripts/*.py 的全部结果（聚合入口）。"""
+    """扫目标目录下全部 .py（聚合入口）。
+
+    调用方 gate 会先 `_prime_caches()` 把文件清单与文本读进内存，但那套缓存是
+    gate 私有的；ast_guard 作为独立可测模块保持自足，不反向依赖 gate。
+    """
     findings, notes = [], []
-    script_dir = os.path.join(target_dir, "scripts")
-    if not os.path.isdir(script_dir):
+    if not os.path.isdir(target_dir):
         return GuardResult(findings=findings, notes=notes)
-    for name in sorted(os.listdir(script_dir)):
-        if not name.endswith(".py"):
-            continue
-        result = scan_file(os.path.join(script_dir, name), f"scripts/{name}")
+    for ap, rel in iter_python_files(target_dir):
+        result = scan_file(ap, rel)
         findings += result["findings"]
         notes += result["notes"]
     return GuardResult(findings=findings, notes=notes)

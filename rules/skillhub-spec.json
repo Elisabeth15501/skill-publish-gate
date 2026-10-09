@@ -1,5 +1,5 @@
 {
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Skill 发布门禁规范库 v3.0.0（skill 代码安全 + SkillHub/ClawHub/ima 平台规范）。数据驱动：规则写在本文件，gate.py 不含词表；新增平台只需加 platform_profiles。",
   "spec": {
     "frontmatter": {

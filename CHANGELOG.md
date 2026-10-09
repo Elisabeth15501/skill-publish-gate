@@ -1,3 +1,79 @@
+## [3.1.0] — 2026-10-09
+
+**这一版收尾对抗式审查的「建议」级 4 项（G1/G2/G3 + 审计 A6），并清掉 v3.0.0 重构时
+自己引入的文档失实。** 改的是**覆盖范围与批量子命令的退出码契约**，不是规则定义本身 → **MINOR**。
+
+判据：按本计划「改 exit code 或 verdict 归属 → MINOR」——G3 把 `dirs` 退出码从「恒为 1」
+改成与 `check` 对齐的 0/2/1；G1/G2 让 ast 薄兜底覆盖嵌套目录与多行调用，会使「此前因漏扫而 PASS」
+的 skill 转为 NEEDS_FIX/BLOCKED（verdict 归属变了）。两者都动外部契约，不能按 PATCH 发。
+
+### P2-6 · `ast_guard` 全量遍历（建议 G1）
+
+**问题**：`scan_skill` 只看 `scripts/` 顶层（`os.listdir("scripts")`），于是 `src/main.py` 与
+`scripts/sub/x.py` 里的危险调用全漏——而 gate 的文本类检查走全量遍历，同一份代码两条检查项
+覆盖面不同，会让人误以为「ast 兜底没报 = 那段代码没问题」。
+
+**修法**：新增 `iter_python_files` 递归 `os.walk` 全目录，排除清单与 gate 的 forbidden 语义一致
+（`.git` / `__pycache__` / `.venv` / `node_modules` / `.workbuddy` / `dist` / `build` 等），
+避免一次 `pip install` 就去审第三方代码。回归 fixture：建 `scripts/`+`src/`+`scripts/sub/` 三个目录
+各一个 `eval()`，实测从扫到 1/3 提升到 3/3。
+
+### P2-7 · 多行调用漏检 `shell=True`（建议 G2）
+
+**问题**：`_match_dangerous` 只看 `lines[lineno-1]`，`subprocess.run(\n  ["ls"],\n  shell=True,\n)`
+的 `shell=True` 在第 3 行 → `AST-SHELL-001` 对多行调用**实测 0 条命中**（规则形同虚设）。
+
+**修法**：新增 `_call_source` 用 `ast.get_source_segment` 取完整调用文本，并显式补末行尾部注释
+（`get_source_segment` 对单行调用会丢掉 `# noqa`，已用探针实测并规避）。回归 fixture：多行 / 跨行 /
+缩进变体全部命中，`# noqa` 豁免在单行与多行下都生效。
+
+### P2-8 · `dirs` 子命令继承 check 参数（建议 G3）
+
+**问题**：`--config`/`--strict`/`--baseline` 只有 `check` 有，`dirs` 静默落后；且 `cmd_dirs`
+无论结论如何都 `sys.exit(1)`，CI 里无法区分「只有建议项」与「被阻断」。
+
+**修法**：抽 `_add_shared_scan_args` 让 `check` 与 `dirs` 同源注册全部扫描参数（含
+`--sarif-in`/`--sarif-trusted`/`--deep-scan`/`--offline`/`--show-info`/`--all-files`）；
+`cmd_dirs` 现在吃 `config`/`strict`/`baseline`，并按 verdict 给 0/2/1；
+`--dir` 非目录报错、`--offline` 与 `--deep-scan` 互斥。新增 `tests/test_g3_verify.py`（31 项）覆盖。
+
+### P2-9 · `GuardResult` docstring 去自指（审计 A6）
+
+源码里的自指式注释（「审计必挑的点」）会让读者误以为「已经审过了」→ 改为就事就事的字段说明。
+
+### 顺带修掉 v3.0.0 重构时自己引入的文档失实
+
+- `references/rule-catalog.md`：原写 `SEC-LICENSE-001` / `AST-PARSE-001` 两条**根本不存在**的规则 ID
+  （代码与规则库都没有），实为 `OSS-COPYLEFT-001`/`OSS-STRIP-001` 与 `AST-*` 系列；AST 规则计数
+  写「共 8 条」实际列出并实现了 **9 条**；AST 规则由 `scripts/ast_guard.py` 实现（不在规则库）。
+  新增 `tests/check_rule_ids.py` 把「文档声称的每个规则 ID 必须真实存在于代码或规则库」变成可跑的断言，
+  以后再写文档就不会凭空造 ID。
+- `ast_guard.py` 危险调用表的说明文字里写了 `subprocess.run([...])`，被 ClawHub 专属的
+  `META-MISMATCH-001`（扫描脚本是否调子进程却未声明 requires）**误命中**——改写成不出现字面量
+  `subprocess.run(` 的措辞后，该 warning 正确指向真正调用 subprocess 的 `gate.py`。
+
+### 验证
+
+- 新增 `tests/test_g12_verify.py`（G1/G2，16 项）+ `tests/test_g3_verify.py`（G3，31 项），并入 `tests/run_all.py`
+- `tests/run_all.py` 七套全绿（test_modules / test_e2e / test_p0_verify / test_p17_verify /
+  test_m3_verify / test_g12_verify / test_g3_verify）；四平台零回归
+- `tests/check_rule_ids.py`：文档声称的 42 个规则 ID 全部真实存在 ✅
+
+### 自反（dogfood 自身）
+
+三平台结果，与历史版本口径一致：
+- `--platform github`：**PASS**（源码树零问题；LICENSE/.gitignore 在 github 模式豁免）
+- `--platform skillhub`：**BLOCKED(2)**——仅 `.gitignore` + `LICENSE`（SkillHub 禁止随仓库目录发布这两个文件，
+  预期，自 v1.4.0 起；发布用 `git archive HEAD` 干净导出副本即可）
+- `--platform clawhub`：**NEEDS_FIX(2)**——`LICENSE-FIELD-001`（frontmatter 声明 `license: MIT-0`，
+  ClawHub 建议移除）+ `META-MISMATCH-001`（gate.py 调 subprocess 但未声明 requires），均不阻断
+- 安全面：三平台均未报凭据泄漏 / PII / 恶意执行 / Prompt 注入 / 持久化篡改
+
+> 注：`tests/check_rule_ids.py` 现在要求「文档里的每个规则 ID 都能在代码或规则库找到」，这条断言会
+> 长期拦住「写文档时编规则 ID」的回归——v3.0.0 那次就是这么悄悄裂开的。
+
+---
+
 ## [3.0.0] — 2026-10-09
 
 **SKILL.md 按渐进式披露（progressive disclosure）重构**。CLI、退出码、规则库、判定逻辑

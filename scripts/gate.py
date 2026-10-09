@@ -60,7 +60,7 @@ GATE_DISCLAIMER = (
     "免责声明：本门禁仅做本地规范预检，不构成 SkillHub 审核保证。"
     "最终能否上架由 SkillHub 三线审核决定，责任由开发者自行承担。"
 )
-GATE_VERSION = "3.0.0"
+GATE_VERSION = "3.1.0"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1651,37 +1651,124 @@ def cmd_check(args):
     sys.exit(gate.verdict()["exit_code"])
 
 
+def _add_shared_scan_args(parser, with_baseline: bool = False) -> None:
+    """注册 check 与 dirs 共享的扫描参数。
+
+    抽出来而不是两处各写一遍，是因为 G3 的根因正是「参数在 check 有、dirs 没有」
+    这种手抄漂移：加参数时只改了 check，dirs 静默落后。共享定义让「新增参数」
+    默认对两个子命令同时生效——要单独只给一个子命令用时显式传 with_baseline。
+
+    with_baseline=False 时不注册 --baseline：批量场景下基线抑制会在汇总表里
+    掩盖「哪些 skill 靠基线才通过」，而表里没有这一列，属于看不懂的结论。
+    """
+    parser.add_argument("--config", default=None,
+                        help="外部配置文件（.json/.yaml）：阈值、封禁文件追加、规则追加。"
+                             "只许更严：阈值只能调低、红线规则不可被覆盖（--strict 全锁）")
+    parser.add_argument("--strict", action="store_true",
+                        help="锁定内置规则库：配置里的 spec/封禁文件覆盖一律报错（仅允许追加类）")
+    parser.add_argument("--show-info", action="store_true",
+                        help="显示 INFO 级命中（出站代理、MCP 未声明等，默认静音，需人工确认定位）")
+    parser.add_argument("--all-files", action="store_true",
+                        help="强制扫全目录（默认若目录是 git 仓库则只扫 git 跟踪集）")
+    parser.add_argument("--sarif-in", default=None,
+                        help="导入外部扫描器的 SARIF 2.1.0（domsec/SkillSpector/Codex Security），"
+                             "finding 档位封顶 medium，不阻断")
+    parser.add_argument("--sarif-trusted", action="store_true",
+                        help="声明 --sarif-in 的 finding 已过验证层，不封顶档位（谨慎使用）")
+    parser.add_argument("--deep-scan", default=None,
+                        help="调用外部深度扫描器并导入其 SARIF 输出，形如 "
+                             "'python3 ~/tools/scanner.py --format sarif {dir}'。"
+                             "{dir} 会被替换为目标目录；不经 shell；失败不影响 L0 判定。"
+                             "路径含空格时必须加引号（Windows 尤其："
+                             "\"C:/Program Files/x.exe\" scanner.py {dir}）")
+    parser.add_argument("--offline", action="store_true",
+                        help="硬开关：禁止 --deep-scan（防 CI 配置手滑把源码传给外部服务）")
+    if with_baseline:
+        parser.add_argument("--baseline", default=None,
+                            help="基线文件：抑制其中列出的指纹（确认过的误报）")
+
+
 def cmd_dirs(args):
     # 与 check 走同一套校验：批量体检最忌「拼错平台、整批按错口径跑完还照样出表」
     try:
-        platform = resolve_platform(args.platform, None)
-    except GateConfigError as exc:
+        config = config_loader.load_config(args.config) if args.config else {}
+        platform = resolve_platform(args.platform, config.get("platform"))
+    except (config_loader.ConfigError, GateConfigError) as exc:
         print(f"❌ {exc}", file=sys.stderr)
         sys.exit(2)
+
     base = args.dir
     dirs = args.dirs or []
     if not dirs:
         base = base or os.path.dirname(os.path.abspath("."))
+        if not os.path.isdir(base):
+            print(f"❌ --dir 不是目录：{os.path.abspath(base)}", file=sys.stderr)
+            sys.exit(2)
         for entry in sorted(os.listdir(base)):
             sd = os.path.join(base, entry)
             if os.path.isdir(sd) and os.path.isfile(os.path.join(sd, "SKILL.md")):
                 dirs.append(sd)
-    rows = []
+    rows, failed_setup, l2_notes = [], [], []
+    if args.offline and args.deep_scan:
+        print("❌ --offline 与 --deep-scan 互斥：离线模式下禁止外部命令"
+              "（这是防源码外传的硬开关，不是建议）", file=sys.stderr)
+        sys.exit(2)
+    # 外部 SARIF 只导入一次：多个 skill 共享同一份外部扫描报告时，
+    # 逐个 skill 重跑 deep-scan 既慢又可能得到不一致的结果。
+    shared_l2 = None
+    if args.sarif_in:
+        try:
+            shared_l2 = load_external_sarif(args.sarif_in, trusted=args.sarif_trusted)
+        except GateConfigError as exc:
+            print(f"⚠️ --sarif-in 忽略：{exc}", file=sys.stderr)
+            shared_l2 = None
     for d in dirs:
-        g = SkillHubGate(d, platform=platform)
-        g.run_all()
-        v = g.verdict()
-        rows.append((g.skill_name, v))
+        # 逐个传 config / strict / baseline（对抗式审查 G3）：此前这三个参数只有
+        # check 有，批量体检想用配置或抑制已知误报时无从下手——「同一工具两个
+        # 子命令能力不一致」会让批量结果与逐个跑对不上，还很难归因。
+        try:
+            g = SkillHubGate(d, use_git=not args.all_files, platform=platform,
+                             config=config, strict=args.strict)
+        except GateConfigError as exc:
+            failed_setup.append((d, str(exc)))
+            continue
+        for pattern in getattr(g, "config_whitelist", []):
+            g.whitelist_res.append(re.compile(pattern, re.I))
+        g.run_all(show_info=args.show_info)
+        if args.baseline:
+            g.suppress_baseline(args.baseline)
+        # 缝接层与 check 同源：深度结果封顶 medium，永远不单独把某个 skill 判 BLOCKED
+        if shared_l2:
+            g.merge_external([dict(i) for i in shared_l2])
+        if args.deep_scan:
+            scan = run_deep_scan(args.deep_scan, d)
+            if scan["issues"]:
+                g.merge_external(scan["issues"])
+            l2_notes += scan.get("notes", [])
+        rows.append((g.skill_name, g.verdict()))
     rows.sort(key=lambda r: (r[1]["exit_code"], -r[1]["blockers"]))
     print(f"{'Skill':<30} {'结论':>10} {'blk':>4} {'warn':>4} {'red':>4}")
     print("-" * 56)
     for name, v in rows:
         print(f"{name:<30} {v['verdict']:>10} {v['blockers']:>4} "
               f"{v['warnings']:>4} {v['redlines']:>4}")
+    for note in l2_notes:
+        print(f"  · {note}", file=sys.stderr)
+    for d, err in failed_setup:
+        print(f"❌ {os.path.basename(d.rstrip('/\\'))}：配置错误 — {err}", file=sys.stderr)
     worst = rows[-1] if rows else None
     if worst and worst[1]["verdict"] != "PASS":
         print(f"\n⚠ 最低分：{worst[0]} ({worst[1]['verdict']}) — 修复后再发布。")
-    sys.exit(0 if all(r[1]["verdict"] == "PASS" for r in rows) else 1)
+    if not rows and not failed_setup:
+        print("（未找到含 SKILL.md 的子目录）", file=sys.stderr)
+    # 退出码与 check 对齐（0 / 1 / 2），此前无论结论如何都只给 1，
+    # 于是 CI 里 `dirs` 无法区分「只有建议项」与「被阻断」——三档契约在批量场景失效。
+    if failed_setup:
+        sys.exit(2)
+    if not rows:
+        sys.exit(2)
+    sys.exit(0 if all(r[1]["verdict"] == "PASS" for r in rows)
+             else max(r[1]["exit_code"] for r in rows))
 
 
 def main():
@@ -1720,36 +1807,14 @@ def main():
                          help="目标平台：skillhub（默认，LICENSE 等是封禁 blocker）/ github（开源许可文件豁免）"
                               "/ clawhub（接受任意扩展名，网络规避词族降级，补 MIT-0/requires 一致性检查）"
                               "/ ima（腾讯 ima 知识库包规范）。缺省时读 --config 的 platform，再默认 skillhub")
-    p_check.add_argument("--show-info", action="store_true",
-                         help="显示 INFO 级命中（出站代理、MCP 未声明等，默认静音，需人工确认定位）")
-    p_check.add_argument("--all-files", action="store_true",
-                         help="强制扫全目录（默认若目录是 git 仓库则只扫 git 跟踪集）")
     p_check.add_argument("--learn", default=None,
                          help="回灌：传入 JSON {\"type\":\"blocker|whitelist|warn\","
                               "\"pattern\":...,\"reason\":...}，写回 rules/feedback.json 后退出")
-    # ── v1.5.0 缝接层 ──
-    p_check.add_argument("--config", default=None,
-                         help="外部配置文件（.json/.yaml）：阈值、封禁文件追加、规则追加。"
-                              "只许更严：阈值只能调低、红线规则不可被覆盖（--strict 全锁）")
-    p_check.add_argument("--strict", action="store_true",
-                         help="锁定内置规则库：配置里的 spec/封禁文件覆盖一律报错（仅允许追加类）")
-    p_check.add_argument("--sarif-in", default=None,
-                         help="导入外部扫描器的 SARIF 2.1.0（domsec/SkillSpector/Codex Security），"
-                              "finding 一律降一级后并入判定")
-    p_check.add_argument("--sarif-trusted", action="store_true",
-                         help="声明 --sarif-in 的 finding 已过验证层，不做降级（谨慎使用）")
-    p_check.add_argument("--baseline", default=None,
-                         help="基线文件：抑制其中列出的指纹（确认过的误报）")
+    # --show-info / --all-files / --config / --strict / --sarif-* / --deep-scan / --offline
+    # 都由共享定义提供，check 与 dirs 同源（G3：手抄两遍必然漂移）
+    _add_shared_scan_args(p_check, with_baseline=True)
     p_check.add_argument("--write-baseline", default=None,
                          help="把本次全部 issue 的指纹写入基线文件（确认误报后再用）")
-    p_check.add_argument("--deep-scan", default=None,
-                         help="调用外部深度扫描器并导入其 SARIF 输出，形如 "
-                              "'python3 ~/tools/scanner.py --format sarif {dir}'。"
-                              "{dir} 会被替换为目标目录；不经 shell；失败不影响 L0 判定。"
-                              "路径含空格时必须加引号（Windows 尤其："
-                              "\"C:/Program Files/x.exe\" scanner.py {dir}）")
-    p_check.add_argument("--offline", action="store_true",
-                         help="硬开关：禁止 --deep-scan（防 CI 配置手滑把源码传给外部服务）")
     p_check.set_defaults(func=cmd_check)
 
     p_dirs = sub.add_parser("dirs", help="批量检查多个 skill 并汇总")
@@ -1758,6 +1823,9 @@ def main():
     p_dirs.add_argument("--platform", "-p", default="github",
                         help="目标平台（同 check --platform；批量体检默认 github，"
                              "因为被检目录通常含 LICENSE/.gitignore 等开源仓库文件")
+    # G3：补齐 check 的同名参数。同一工具两个子命令能力不一致是有代价的——
+    # 批量结果与逐个 check 对不上时，很难归因到底是配置差异还是代码差异。
+    _add_shared_scan_args(p_dirs, with_baseline=True)
     p_dirs.set_defaults(func=cmd_dirs)
 
     args = parser.parse_args()

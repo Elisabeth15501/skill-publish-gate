@@ -14,13 +14,19 @@
 | SEC-MALWARE-001 | 恶意执行模式（base64 解码后动态执行、下载即执行、反向 shell 等） | critical |
 | SEC-PROMPT-001 | Prompt 注入特征（忽略之前指令、越狱模式等） | critical |
 | SEC-PERSIST-001 | 指示宿主永久篡改持久化文件（SOUL.md / MEMORY.md / IDENTITY.md / USER.md） | critical |
-| SEC-LICENSE-001 | 传染性开源协议（copyleft 家族）与版权剥离条款；协议名只存规则库，文档不枚举以免自描述误报 | critical / high |
+| OSS-COPYLEFT-001 | 传染性开源协议（copyleft 家族）——违反会触发衍生作品开源义务 | critical / redline |
+| OSS-STRIP-001 | 剥离第三方版权或许可声明 | critical / redline |
 | SEC-PERMISSION-001 | 脚本含写文件 / 子进程 / 网络但 frontmatter 无权限声明（过度授权） | medium |
-| AST-*-001 | stdlib ast 精确到行的危险调用：动态执行、shell 解释执行、不安全反序列化。具体规则 ID：AST-EVAL-001 / AST-EXEC-001 / AST-OS-001 / AST-SHELL-001 / AST-PICKLE-001 | high |
-| AST-PARSE-001 | 文件未被 ast 覆盖 / 解析失败 | info（默认静音） |
+| AST-*-001 | stdlib ast 精确到行的危险调用，共 9 条：AST-EVAL-001 / AST-EXEC-001 / AST-OS-001 / AST-SHELL-001 / AST-PICKLE-001 / AST-YAML-001 / AST-MARSHAL-001 / AST-COMPILE-001 / AST-IMPORT-001 | high |
 | PRIV-PATH-001 | 绝对路径泄漏（含本机用户名） | medium |
 | PRIV-NAME-001 | 真实姓名 / 用户名（已排除用户公开笔名） | medium |
 | PRIV-MEAS-001 | 真实量测值（「整仓 52 个文件」这类暴露仓库规模的表述） | medium |
+| PRIV-PII-001 | 身份证 / 手机 / 银行卡等 PII | critical |
+
+> AST 规则由 `scripts/ast_guard.py` 实现（不在规则库里），用的是 stdlib `ast`，
+> 按点号路径精确匹配——所以 `json.loads` 不报、`os.system` 报。`# noqa` / `# nosec` /
+> `# gate: allow` 注释可豁免单处命中，且**单行与多行调用都生效**。
+> 解析失败（语法错误、超深嵌套）只记 note 不报 finding，`--show-info` 可看到。
 
 ## 2. 平台规范（SPEC）
 

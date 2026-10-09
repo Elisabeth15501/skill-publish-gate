@@ -28,6 +28,8 @@ TESTS = [
     "test_p0_verify.py",     # 三个原始攻击 + S2/S6 的原样重打
     "test_p17_verify.py",    # 跨工具去重 + 指纹抗行号漂移
     "test_m3_verify.py",     # feedback 原子写与并发
+    "test_g12_verify.py",    # 建议级 G1（全量遍历）+ G2（多行调用源码）验证
+    "test_g3_verify.py",     # 建议级 G3（dirs 继承 check 参数 + 三档退出码契约）
 ]
 
 
