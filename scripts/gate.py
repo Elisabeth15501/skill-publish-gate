@@ -60,7 +60,7 @@ GATE_DISCLAIMER = (
     "免责声明：本门禁仅做本地规范预检，不构成 SkillHub 审核保证。"
     "最终能否上架由 SkillHub 三线审核决定，责任由开发者自行承担。"
 )
-GATE_VERSION = "3.1.0"
+GATE_VERSION = "3.2.0"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -180,6 +180,7 @@ class SkillHubGate:
         self.learned_blockers: list = []
         self.learned_warns: list = []
         self.show_info = False
+        self._fm_data_ok = False  # 哨兵：frontmatter 解析是否已成功（清 _fm_data 隐式 hasattr 耦合，见 B 轴额外发现）
         # 外部配置生效摘要（供报告展示，让「我配的东西到底生效没」可核对）
         self.config_applied: list = []
         # --config / --rules：只许更严，越权配置直接抛 ConfigError
@@ -363,11 +364,12 @@ class SkillHubGate:
             )
             return
         self._fm_data = data
+        self._fm_data_ok = True
 
     # ── 检查 2：frontmatter 必填字段 + 格式（CLI 硬校验）──
 
     def check_frontmatter_required(self):
-        if not hasattr(self, "_fm_data"):
+        if not self._fm_data_ok:
             return  # 上一步已 BLOCKER
         data = self._fm_data
         fm = self.spec.get("frontmatter", {})
@@ -515,7 +517,7 @@ class SkillHubGate:
     # ── 检查 5：版本号一致性 ──
 
     def check_version_consistency(self):
-        if not hasattr(self, "_fm_data"):
+        if not self._fm_data_ok:
             return
         declared = str(self._fm_data.get("version", "")).strip()
         if not declared or not re.match(r"^\d+\.\d+\.\d+", declared):
@@ -546,7 +548,7 @@ class SkillHubGate:
     # ── 检查 6：network 声明一致性 ──
 
     def check_network_consistency(self):
-        if not hasattr(self, "_fm_data"):
+        if not self._fm_data_ok:
             return
         text = self._text("SKILL.md")
         declared_none = bool(re.search(r'(?m)^\s*network:\s*none', text))
@@ -963,7 +965,7 @@ class SkillHubGate:
             frontmatter 未声明 requires → WARN（安全扫描阶段可能打回）。"""
         if self.platform != "clawhub":
             return
-        if not hasattr(self, "_fm_data"):
+        if not self._fm_data_ok:
             return
         data = self._fm_data
         clause = "ClawHub 发布规范（强制 MIT-0 / 声明-内容一致性）"
@@ -1068,7 +1070,7 @@ class SkillHubGate:
         clause = f"ima 包规范（{profile.get('display_name', 'ima')}）"
 
         # (a) 七字段
-        if hasattr(self, "_fm_data"):
+        if self._fm_data_ok:
             for field in profile.get("frontmatter_required", []):
                 if self._fm_data.get(field) in (None, "", []):
                     self._add(
@@ -1326,6 +1328,15 @@ class SkillHubGate:
 # ═══════════════════════════════════════════════════════════════
 
 # 命名刻意不含 secret 字样（避免静态分析把本列表当敏感数据来源误报）。
+#
+# 为何写死在 gate.py 而非 rules/skillhub-spec.json（清 B4 黄色项的安全语义）：
+#   本列表属于「代码安全」轴——门禁的本职就是抓源码里泄露的凭据，9 条特征
+#   （GitHub/OpenAI/AWS/GitLab/Slack/Google 密钥 + 私钥块/连接串/高熵赋值）
+#   是硬编码的对抗性知识，与「平台规范」（spec.json 管的 frontmatter/bundle/
+#   license 等）是两条独立轴。spec.json 走 --rules 可被外部覆盖、可被 --strict
+#   锁死，而凭据检测必须是门禁自带的不可关底线——放进 spec 反而给人「可改弱」的
+#   错觉。边界口诀：平台类 → spec.json；代码安全类 → 本文件。
+#   红线：本清单只增不减。新增凭据格式只能往这里加，绝不从这里删（删 = 留漏洞）。
 CREDENTIAL_PATTERNS = [
     (r"gh[pousr]_[A-Za-z0-9]{20,}", "GitHub Token"),
     (r"sk-[A-Za-z0-9]{20,}", "OpenAI 风格 API Key"),
@@ -1385,12 +1396,23 @@ def save_feedback(data):
 def learn(entry):
     """把一次发布后审核发现回灌进规则集。
     entry: {"type": "blocker"|"whitelist"|"warn", "pattern": "...", "reason": "..."}
-    返回写入后的摘要文本。"""
+    返回写入后的摘要文本。
+
+    SECURITY（v3.1.1，对抗式审查 S6 的教训）：pattern 会进入 feedback.json 并在
+    每次扫描时对全量文件做正则匹配（_feedback_res）。一条灾难性回溯 pattern
+    （如 (a+)+）即可挂死整个门禁。因此写回前必须走 config_loader 同款
+    ReDoS 粗检 + 长度上限，与 --config 路径的防护对齐——否则 --learn 成为
+    绕过 ReDoS 防护的旁路。"""
     if not isinstance(entry, dict) or "pattern" not in entry:
         raise ValueError('learn 需要 {"type":..., "pattern":...}')
     kind = entry.get("type")
     if kind not in ("blocker", "whitelist", "warn"):
         raise ValueError("type 必须是 blocker / whitelist / warn")
+    pat = entry["pattern"]
+    if not isinstance(pat, str):
+        raise ValueError(f"pattern 必须是字符串（收到 {type(pat).__name__}）")
+    # 与 config_loader 同一道 ReDoS 粗检 + 长度上限（S6 修复：堵住旁路）
+    config_loader._reject_risky_pattern(pat, f"--learn:{kind}")
     fb = load_feedback()
     fb.setdefault("whitelist", [])
     fb.setdefault("learned_blockers", [])
@@ -1544,23 +1566,28 @@ def resolve_platform(cli_value, config_value) -> str:
     return platform
 
 
-def cmd_check(args):
-    # 回灌模式：写完即退出（不扫描）
-    if args.learn is not None:
-        try:
-            entry = json.loads(args.learn)
-        except json.JSONDecodeError as exc:
-            print(f"❌ --learn JSON 解析失败：{exc}")
-            sys.exit(2)
-        try:
-            print("🔁 " + learn(entry))
-        except ValueError as exc:
-            print(f"❌ {exc}")
-            sys.exit(2)
-        sys.exit(0)
+def _handle_learn(args):
+    """回灌模式：把发布后审核发现写回 feedback.json 即退出，不跑扫描。"""
+    if args.learn is None:
+        return
+    try:
+        entry = json.loads(args.learn)
+    except json.JSONDecodeError as exc:
+        print(f"❌ --learn JSON 解析失败：{exc}")
+        sys.exit(2)
+    try:
+        print("🔁 " + learn(entry))
+    except ValueError as exc:
+        print(f"❌ {exc}")
+        sys.exit(2)
+    sys.exit(0)
 
-    config = config_loader.load_config(args.config) if args.config else {}
 
+def _validate_dir_and_platform(args, config):
+    """校验 --dir 存在并解析 platform；任一失败直接退出（不扫描）。
+
+    抽出来清 B5：cmd_check 此前把这段与 7 段职责混在一个 105 行函数里，
+    改某段（如基线互斥）需通读整个大函数。"""
     # --dir 必须是已存在的目录（对抗式审查 M4）。此前不存在时会把相对路径接到
     # cwd 后面，于是 `--dir /nonexistent/path` 变成「C:\Program Files\...\nonexistent\path」，
     # skill 名取 basename 成了 "path" —— 用户会以为门禁审了一个叫 path 的 skill，
@@ -1570,51 +1597,59 @@ def cmd_check(args):
         kind = "不是目录" if os.path.exists(resolved) else "不存在"
         print(f"❌ --dir {kind}：{resolved}", file=sys.stderr)
         sys.exit(2)
-
     try:
-        platform = resolve_platform(args.platform, config.get("platform"))
+        return resolve_platform(args.platform, config.get("platform"))
     except GateConfigError as exc:
         print(f"❌ {exc}", file=sys.stderr)
         sys.exit(2)
 
-    if args.offline and args.deep_scan:
-        print("❌ --offline 与 --deep-scan 互斥：离线模式下禁止外部命令"
-              "（这是防源码外传的硬开关，不是建议）", file=sys.stderr)
-        sys.exit(2)
 
+def _build_and_run_gate(d, platform, config, args):
+    """构造一个 SkillHubGate 并跑完全部检查，回灌白名单已注入。
+
+    清 B2：check 与 dirs 此前各自写一遍「构造 gate + 注入 config_whitelist + run_all」，
+    G3 注释记过手抄漂移教训——抽成一处，新增构造逻辑时两个子命令同步生效。
+    返回 (gate, err)：err 非空表示构造失败（GateConfigError），调用方决定退出还是计入失败清单。"""
     try:
-        gate = SkillHubGate(
-            args.dir, use_git=not args.all_files, platform=platform,
+        g = SkillHubGate(
+            d, use_git=not args.all_files, platform=platform,
             config=config, strict=args.strict,
         )
     except GateConfigError as exc:
-        print(f"❌ 配置错误：{exc}")
-        sys.exit(2)
-
+        return None, str(exc)
     # 外部白名单（--config whitelist_append）并入回灌白名单
-    for pattern in getattr(gate, "config_whitelist", []):
-        gate.whitelist_res.append(re.compile(pattern, re.I))
+    for pattern in getattr(g, "config_whitelist", []):
+        g.whitelist_res.append(re.compile(pattern, re.I))
+    g.run_all(show_info=args.show_info)
+    return g, None
 
-    gate.run_all(show_info=args.show_info)
 
-    # ── 缝接层：L2 结果并入（每一步失败都不影响 L0 判定）──
+def _load_shared_sarif(args):
+    """导入外部 SARIF（check 单 skill / dirs 批量在循环外调一次）。
+
+    清 B2：两个子命令此前各自手抄 load_external_sarif 的异常分支，极易漂移。
+    失败一律返回 None，由调用方决定要不要计入判定。"""
+    if not args.sarif_in:
+        return None
+    try:
+        return load_external_sarif(args.sarif_in, trusted=args.sarif_trusted)
+    except GateConfigError as exc:
+        # 走 stderr：stdout 要留给报告本体，json/sarif 得能被 `| jq` 直接消费
+        print(f"⚠️ {exc}（已忽略，不影响 L0 判定）", file=sys.stderr)
+        return None
+
+
+def _apply_baseline_stitching(gate, args):
+    """把 --baseline / --write-baseline 的互斥校验与抑制/写入统一应用到一个 gate。
+
+    清 B2：check 与 dirs 此前各写一遍这段序列，G3 记过「手抄漂移」教训——
+    加缝接能力时只改这一处，两个子命令同步生效。返回 notes 列表（dirs 批量场景
+    不展示基线/sarif 日志，故可忽略返回值）。write_baseline 用 getattr 兜底：dirs
+    子命令未注册 --write-baseline，直接访问会 AttributeError。"""
     notes = []
-    if args.sarif_in:
-        try:
-            l2 = load_external_sarif(args.sarif_in, trusted=args.sarif_trusted)
-        except GateConfigError as exc:
-            # 走 stderr：stdout 要留给报告本体，json/sarif 得能被 `| jq` 直接消费
-            print(f"⚠️ {exc}（已忽略，不影响 L0 判定）", file=sys.stderr)
-            l2 = []
-        if l2:
-            stats = gate.merge_external(l2)
-            notes.append(f"SARIF 导入 {stats['added']} 条（去重 {stats['deduped']} 条）")
-    if args.deep_scan:
-        deep = run_deep_scan(args.deep_scan, gate.target_dir)
-        if deep["issues"]:
-            gate.merge_external(deep["issues"])
-        notes += deep["notes"]
-    if args.baseline and args.write_baseline:
+    baseline = args.baseline
+    write_baseline = getattr(args, "write_baseline", None)
+    if baseline and write_baseline:
         # 这两个参数同开会「读进来再写回去」，实测把基线清空（对抗式审查 B3）：
         # write 的是 suppress 之后的列表，被抑制的项已经不在里面了。
         # 语义上这俩也不该共存于一次调用——读基线是「用它筛」，写基线是「重新定义它」。
@@ -1622,21 +1657,58 @@ def cmd_check(args):
               "先抑制再写入会把基线清空（写进去的是已过滤后的列表）。"
               "请分两次跑。", file=sys.stderr)
         sys.exit(2)
-
-    if args.baseline:
-        result = gate.suppress_baseline(args.baseline)
+    if baseline:
+        result = gate.suppress_baseline(baseline)
         notes.append(f"基线抑制 {result['suppressed']} 条" if result["suppressed"]
                      else "基线为空或无命中")
         if result["note"]:
             notes.append(result["note"])
-
-    if args.write_baseline:
-        result = gate.write_baseline(args.write_baseline)
-        notes.append(f"已写入基线 {result['written']} 条指纹 → {args.write_baseline}")
+    if write_baseline:
+        result = gate.write_baseline(write_baseline)
+        notes.append(f"已写入基线 {result['written']} 条指纹 → {write_baseline}")
         if result["skipped_blockers"]:
             notes.append(
                 f"已跳过 {result['skipped_blockers']} 条 blocker（critical/high 不入基线）。"
                 "阻断项请修掉，或用 --learn whitelist 单条豁免以留下可追溯记录。")
+    return notes
+
+
+def _run_stitching(gate, args, l2):
+    """缝接层：把外部 SARIF（l2）+ 深度扫描 + 基线抑制/写入统一应用到一个 gate。
+
+    清 B2：check/dirs 此前各写一遍这段序列。l2 由调用方提供（check 调用前 load 一次；
+    dirs 在循环外 load 一次后逐 skill 复用）。返回 notes。"""
+    notes = []
+    if l2:
+        stats = gate.merge_external(l2)
+        notes.append(f"SARIF 导入 {stats['added']} 条（去重 {stats['deduped']} 条）")
+    if args.deep_scan:
+        deep = run_deep_scan(args.deep_scan, gate.target_dir)
+        if deep["issues"]:
+            gate.merge_external(deep["issues"])
+        notes += deep["notes"]
+    notes += _apply_baseline_stitching(gate, args)
+    return notes
+
+
+def cmd_check(args):
+    _handle_learn(args)  # 回灌模式：写完即退出（不扫描）
+    config = config_loader.load_config(args.config) if args.config else {}
+
+    platform = _validate_dir_and_platform(args, config)
+
+    if args.offline and args.deep_scan:
+        print("❌ --offline 与 --deep-scan 互斥：离线模式下禁止外部命令"
+              "（这是防源码外传的硬开关，不是建议）", file=sys.stderr)
+        sys.exit(2)
+
+    gate, err = _build_and_run_gate(args.dir, platform, config, args)
+    if err:
+        print(f"❌ 配置错误：{err}")
+        sys.exit(2)
+
+    l2 = _load_shared_sarif(args)
+    notes = _run_stitching(gate, args, l2)
 
     out = gate.report(fmt=args.format, output_path=args.output)
     if notes and args.format == "text":
@@ -1715,29 +1787,16 @@ def cmd_dirs(args):
         sys.exit(2)
     # 外部 SARIF 只导入一次：多个 skill 共享同一份外部扫描报告时，
     # 逐个 skill 重跑 deep-scan 既慢又可能得到不一致的结果。
-    shared_l2 = None
-    if args.sarif_in:
-        try:
-            shared_l2 = load_external_sarif(args.sarif_in, trusted=args.sarif_trusted)
-        except GateConfigError as exc:
-            print(f"⚠️ --sarif-in 忽略：{exc}", file=sys.stderr)
-            shared_l2 = None
+    shared_l2 = _load_shared_sarif(args)
     for d in dirs:
         # 逐个传 config / strict / baseline（对抗式审查 G3）：此前这三个参数只有
         # check 有，批量体检想用配置或抑制已知误报时无从下手——「同一工具两个
         # 子命令能力不一致」会让批量结果与逐个跑对不上，还很难归因。
-        try:
-            g = SkillHubGate(d, use_git=not args.all_files, platform=platform,
-                             config=config, strict=args.strict)
-        except GateConfigError as exc:
-            failed_setup.append((d, str(exc)))
+        g, err = _build_and_run_gate(d, platform, config, args)
+        if err:
+            failed_setup.append((d, err))
             continue
-        for pattern in getattr(g, "config_whitelist", []):
-            g.whitelist_res.append(re.compile(pattern, re.I))
-        g.run_all(show_info=args.show_info)
-        if args.baseline:
-            g.suppress_baseline(args.baseline)
-        # 缝接层与 check 同源：深度结果封顶 medium，永远不单独把某个 skill 判 BLOCKED
+        # 缝接层与 check 同源（清 B2）：深度结果封顶 medium，永远不单独把某个 skill 判 BLOCKED
         if shared_l2:
             g.merge_external([dict(i) for i in shared_l2])
         if args.deep_scan:
@@ -1745,6 +1804,8 @@ def cmd_dirs(args):
             if scan["issues"]:
                 g.merge_external(scan["issues"])
             l2_notes += scan.get("notes", [])
+        # dirs 批量场景不展示基线/sarif 日志（与 check 不同），故忽略返回值
+        _apply_baseline_stitching(g, args)
         rows.append((g.skill_name, g.verdict()))
     rows.sort(key=lambda r: (r[1]["exit_code"], -r[1]["blockers"]))
     print(f"{'Skill':<30} {'结论':>10} {'blk':>4} {'warn':>4} {'red':>4}")

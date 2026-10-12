@@ -30,6 +30,7 @@ TESTS = [
     "test_m3_verify.py",     # feedback 原子写与并发
     "test_g12_verify.py",    # 建议级 G1（全量遍历）+ G2（多行调用源码）验证
     "test_g3_verify.py",     # 建议级 G3（dirs 继承 check 参数 + 三档退出码契约）
+    "test_en_docs.py",       # 英文版一致性（共享源不变量 + 引用 ID 真实存在 + 防跨语言漂移）
 ]
 
 

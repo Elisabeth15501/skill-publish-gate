@@ -1,3 +1,34 @@
+## [3.2.0] — 2026-10-13
+
+**新增英文版文档 + 顺手清 clean-code 审计黄项（B4 / B5 / B2 + `_fm_data` 哨兵）。**
+规则定义与退出码契约一字未改 → **MINOR**。
+
+### 英文版（feature）
+
+- 新增 `docs/en/*.en.md` 四份英文文档（SKILL / README / rule-catalog / cli-reference），
+  由 `scripts/gen_en_docs.py` 从唯一数据源（spec.json + gate.py argparse + ast_guard AST-\*）
+  注入「可机验不变量」，纯翻译文本手写；`tests/test_en_docs.py` 兜底跨语言漂移。
+
+### clean-code 审计顺手清（黄项，零行为风险，测试兜底）
+
+- **B4（CREDENTIAL_PATTERNS 双源）**：加注释说清「为何凭据特征写死在 gate.py 而非
+  spec.json」——代码安全轴 vs 平台规范轴，且本清单只增不减（红线）。
+- **B5（cmd_check 长函数 105 行）**：拆成 `_handle_learn` / `_validate_dir_and_platform` /
+  `_build_and_run_gate` / `_load_shared_sarif` / `_apply_baseline_stitching` / `_run_stitching`
+  六个小函数，`cmd_check` 缩到 ~30 行、单职责清晰。
+- **B2（check/dirs 平行编排）**：上述 helper 同时被 `cmd_check` 与 `cmd_dirs` 复用，
+  缝接层（SARIF 导入 + 基线抑制/写入 + 构造 gate）不再手抄两遍，G3 漂移教训被结构性消除。
+  `write_baseline` 用 `getattr(args, "write_baseline", None)` 兜底（dirs 未注册该参数）。
+- **`_fm_data` 哨兵**：`hasattr(self, "_fm_data")` 隐式耦合改成显式 `self._fm_data_ok: bool`，
+  消除「加新检查忘了哨兵」的隐患（B 轴额外发现）。
+
+### 未动（审计明确「现在不动」，有测试兜底且无 bug）
+
+- B1（指纹三键 `issue_identity`/`sarif_io_key`/`fingerprint`）：改指纹口径时才顺手清。
+- A 轴长函数/深嵌套/宽签名（`_add` 11 参等）：命名与注释已对冲理解成本，强拆反而抬升 B。
+
+---
+
 ## [3.1.0] — 2026-10-09
 
 **这一版收尾对抗式审查的「建议」级 4 项（G1/G2/G3 + 审计 A6），并清掉 v3.0.0 重构时
