@@ -1,7 +1,7 @@
 ---
 name: skill-publish-gate
 slug: skill-publish-gate
-version: 3.1.0
+version: 3.1.1
 displayName: Skill 发布门禁（代码安全 + 平台规范）
 summary: 发布 Skill 前本地跑一遍，一次看全「代码安全」与「SkillHub/ClawHub/ima 平台规范」，命中即阻断
 tags: [skill, 发布门禁, 合规预检, 代码安全, preflight, 上架检查, skillhub, clawhub, ima, sarif, publish-gate]
@@ -25,6 +25,7 @@ when_to_use: >-
   有没有凭据或 PII），而不是一份安全审计报告或合规法律意见书。不用于深度漏洞分析、
   已发布 skill 的运行期监控、或任何非 skill 目录的通用扫描。
 allowed-tools: [Read, Grep, Glob, Bash]
+requires: ["python3", "bash"]
 disable-model-invocation: false
 user-invocable: true
 context: fork

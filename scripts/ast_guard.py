@@ -71,7 +71,8 @@ _DOTTED_CALLS = {
 }
 
 _SHELL_TRUE_RE = re.compile(r"shell\s*=\s*True", re.I)
-_YAML_UNSAFE_RE = re.compile(r"yaml\.load\s*\((?![^)]*Safe)", re.I)
+_YAML_LOAD_RE = re.compile(r"yaml\.load\s*\(", re.I)
+_YAML_SAFE_LOADER_RE = re.compile(r"\bSafeLoader\b", re.I)
 _ALLOW_COMMENT_RE = re.compile(r"#\s*(noqa|nosec|gate:\s*allow)", re.I)
 _SHELL_MODULES_RE = re.compile(r"^(subprocess|os|commands|popen2)\b")
 
@@ -226,10 +227,10 @@ def _match_dangerous(dotted: str, src: str) -> tuple:
         return ("high", "AST-SHELL-001",
                 "以 shell=True 调外部命令，参数拼接即等于命令注入",
                 "改用列表形式参数 + shell=False；确需 shell 时严格校验每个参数。")
-    if _YAML_UNSAFE_RE.search(src):
+    if _YAML_LOAD_RE.search(src) and not _YAML_SAFE_LOADER_RE.search(src):
         return ("medium", "AST-YAML-001",
                 "yaml.load 未指定 SafeLoader，可构造对象实例化任意类",
-                "改用 yaml.safe_load。")
+                "改用 yaml.safe_load；确需全量加载时显式传 SafeLoader 并说明输入来源为何可信。")
     if re.search(r"__import__\s*\(", src):
         return ("medium", "AST-IMPORT-001",
                 "__import__ 动态导入，绕过静态依赖审计",
