@@ -828,6 +828,118 @@
       ],
       "requires_declaration": true,
       "description": "文中提到 MCP 工具/服务。请在 frontmatter 的 requires 里显式声明所依赖的 MCP server（与 ClawHub 的 requires 一致性检查同源），否则宿主与用户都无法判断这个 skill 会动哪些外部工具。默认静音（几乎每篇提到 MCP 的文档都该声明，逐行报是噪音），用 --show-info 查看。"
+    },
+    {
+      "id": "SEC-PRIVESC-001",
+      "clause": "A.I.G SkillTrustBench T05（提权/权限提升）/第5.4条（最小权限）",
+      "category": "SECURITY",
+      "severity": "high",
+      "redline": false,
+      "authority_type": "static_analysis",
+      "scan_targets": [
+        "scripts"
+      ],
+      "patterns": [
+        "os\\.setuid\\s*\\(\\s*0",
+        "os\\.seteuid\\s*\\(\\s*0",
+        "os\\.setresuid\\s*\\(\\s*0",
+        "\\bpkexec\\b",
+        "\\bsudo\\s+",
+        "\\bsu\\s+-",
+        "\\bdoas\\s+"
+      ],
+      "self_describing_markers": [
+        "防护",
+        "防御",
+        "检测",
+        "安全",
+        "扫描",
+        "审计",
+        "说明",
+        "示例",
+        "如何识别"
+      ],
+      "description": "命中提权特征（setuid(0)/pkexec/sudo/su -/doas）。Skill 不应以 root 或其他身份运行；确需降权请用显式白名单化的固定 uid。除非是技能在描述/检测提权本身（带防御性元语境），否则删除。",
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
+    },
+    {
+      "id": "SEC-PERSIST-001",
+      "clause": "A.I.G SkillTrustBench T06（OS 持久化）/第5.1条（不得包含恶意代码）",
+      "category": "SECURITY",
+      "severity": "high",
+      "redline": false,
+      "authority_type": "static_analysis",
+      "scan_targets": [
+        "scripts"
+      ],
+      "patterns": [
+        "\\bcrontab\\b",
+        "\\bsystemctl\\b",
+        "\\bschtasks\\b",
+        "\\blaunchctl\\b",
+        "LaunchAgents",
+        "rc\\.local",
+        "authorized_keys",
+        "@reboot",
+        "\\.bashrc",
+        "HKEY_",
+        "\\bwinreg\\b",
+        "reg\\s+add",
+        "/etc/init\\.d"
+      ],
+      "self_describing_markers": [
+        "防护",
+        "防御",
+        "检测",
+        "安全",
+        "扫描",
+        "审计",
+        "说明",
+        "示例",
+        "如何识别",
+        "持久化"
+      ],
+      "description": "命中 OS 持久化特征（crontab/systemctl/schtasks/launchctl/LaunchAgents/rc.local/authorized_keys/@reboot/.bashrc/注册表自启动）。Skill 不应在宿主机植入开机/定时自启；除非是技能在描述/检测持久化本身（带防御性元语境），否则删除。",
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
+    },
+    {
+      "id": "SEC-HIJACK-001",
+      "clause": "A.I.G SkillTrustBench T07（通用工具/依赖劫持）/第5.4条（最小权限）",
+      "category": "SECURITY",
+      "severity": "high",
+      "redline": false,
+      "authority_type": "static_analysis",
+      "scan_targets": [
+        "scripts"
+      ],
+      "patterns": [
+        "sys\\.path\\.insert\\s*\\(\\s*0",
+        "LD_PRELOAD",
+        "PYTHONPATH\\s*=",
+        "DOCKER_HOST\\s*=",
+        "export\\s+PATH\\s*="
+      ],
+      "exclude_patterns": [
+        "sys\\.path\\.insert\\s*\\(\\s*0\\s*,\\s*[^)]*__file__"
+      ],
+      "self_describing_markers": [
+        "防护",
+        "防御",
+        "检测",
+        "安全",
+        "扫描",
+        "审计",
+        "说明",
+        "示例"
+      ],
+      "description": "命中工具/环境劫持特征（sys.path.insert(0,...) 注入搜索路径 / LD_PRELOAD / PYTHONPATH / DOCKER_HOST / 改写 PATH）。这类手法可让恶意模块先于可信代码被加载。合法的 `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))` 自举已豁免。除非是技能在描述/检测劫持本身（带防御性元语境），否则删除或改为显式白名单路径。",
+      "platform_downgrade": {
+        "clawhub": "medium"
+      }
     }
   ],
   "layout_note": "顶层只有 version/description/rules/layout_note 四项；所有可被 _load_spec() 读到的配置都在 spec 子树里，rules 是规则数组。platform_profiles 曾放在顶层，导致 check_ima_compliance 静默全跳过（2026-10-06 修复）。"

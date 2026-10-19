@@ -55,6 +55,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ast_guard  # noqa: E402  —— 同目录模块，需先补 sys.path
 import config_loader  # noqa: E402
 import sarif_io  # noqa: E402
+import deobfuscate  # noqa: E402  —— P0-1 反混淆预检层
+import sca  # noqa: E402  —— P0-4 离线 SCA（T08）
 
 GATE_DISCLAIMER = (
     "免责声明：本门禁仅做本地规范预检，不构成 SkillHub 审核保证。"
@@ -1052,6 +1054,73 @@ class SkillHubGate:
                 "redline": False, "authority_type": "static_analysis", "clause": "",
             })
 
+    # ── 检查 14.5：反混淆预检层（P0-1，T03/T04 规避）──
+
+    def check_deobfuscation(self):
+        """SECURITY：解缠 base64/hex/zlib 嵌套 blob，并扫明文 C2/云元数据 IP。
+
+        恶意 skill 常用多层编码把危险调用藏进一长串 base64，让 check_rules /
+        check_ast_dangerous_calls 的正则与 ast 完全看不见。这一层先把 blob 展开，
+        再回查强危险 sink（os.system / eval / 反向 shell / 元数据 IP），把绕过静态
+        扫描的载荷重新暴露出来。纯本地、零出网、确定性。
+
+        报告口径：obfuscated 命中按 high（已实际藏匿恶意意图）；明文 C2/元数据 IP
+        按 critical（云凭据窃取 / 反弹 shell 是最高危信号）。"""
+        sdir = os.path.join(self.target_dir, "scripts")
+        if not os.path.isdir(sdir):
+            return
+        for f in sorted(os.listdir(sdir)):
+            if not f.endswith(".py"):
+                continue
+            rel = f"scripts/{f}"
+            for lineno, line in enumerate(self._read(rel), 1):
+                # 1) 编码混淆解缠
+                for hit in deobfuscate.scan_line(line):
+                    self._add(
+                        "SECURITY", "high", rel, lineno, hit["revealed"],
+                        "删除藏在编码串里的危险调用；skill 不应通过 base64/hex 嵌套"
+                        "规避安全扫描。",
+                        redline=False, authority_type="static_analysis",
+                        rule_id="SEC-OBFUSC-001",
+                        clause="代码安全：混淆载荷中暴露危险 sink（" + hit["sink"] + "）",
+                    )
+                # 2) 明文 C2 / 云元数据 IP
+                for hit in deobfuscate.scan_plaintext(line):
+                    sev = "critical" if hit["sink"] in ("metadata-ip", "c2-beacon") else "high"
+                    self._add(
+                        "SECURITY", sev, rel, lineno, hit["found"],
+                        "删除明文反向 shell / 云元数据 IP 访问；这是凭据窃取与远程控制的最高危信号。",
+                        redline=False, authority_type="static_analysis",
+                        rule_id="SEC-C2-001",
+                        clause="代码安全：明文 C2 / 云元数据 IP（" + hit["sink"] + "）",
+                    )
+
+    # ── 检查 14.6：离线 SCA（P0-4，T08 依赖/CVE）──
+
+    def check_sca(self):
+        """SECURITY：离线软件成分分析（对标 A.I.G 依赖/CVE 扫描）。
+
+        零出网：漏洞库随门禁发布（data/vuln-deps.json）。检查两件事——
+          (a) typosquat：导入的第三方包名仿冒知名包（SCA-TYPOSQUAT-001，high）；
+          (b) pinned-CVE：锁定的第三方版本落在已知漏洞区间（SCA-CVE-001，high）。
+        未锁版本的普通第三方依赖只给 medium 提示（SCA-THIRDPARTY-001），不阻断。"""
+        result = sca.scan_skill(self.target_dir)
+        for f in result["findings"]:
+            self._add(
+                "SECURITY", f["severity"], f["file"], f["line"], f["found"],
+                f["recommendation"],
+                redline=False, authority_type="static_analysis",
+                rule_id=f["rule_id"],
+                clause=f"代码安全（SCA）：{f.get('why', '第三方依赖风险')}",
+            )
+        for note in result.get("notes", []):
+            self.info_hits.append({
+                "rule_id": "SCA-NOTE-001", "category": "SECURITY", "severity": "info",
+                "file": "", "line": 0, "found": note.get("text", ""),
+                "recommendation": "", "redline": False,
+                "authority_type": "static_analysis", "clause": "",
+            })
+
     # ── 检查 15：ima 包规范（仅 --platform ima）──
 
     def check_ima_compliance(self):
@@ -1161,6 +1230,8 @@ class SkillHubGate:
         self.check_license_compliance()
         self.check_clawhub_compliance()
         self.check_ast_dangerous_calls()
+        self.check_deobfuscation()
+        self.check_sca()
         self.check_ima_compliance()
 
     # ── 缝接层：L2 结果并入（v1.5.0）──

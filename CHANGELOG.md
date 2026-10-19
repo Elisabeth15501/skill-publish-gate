@@ -1,4 +1,27 @@
+## [3.2.0] — 2026-10-17
+
+**P0：对标 Tencent AI-Infra-Guard 的 SkillTrustBench T03–T08 深度补齐（新增代码安全检测能力，向后兼容 → MINOR → 3.2.0）。**
+
+按 `skill-publish-gate-优化方案-对标AIG.md` 的 P0 落地。设计纪律与既有门禁一致：纯本地、离线、零必需密钥、确定性、fail-closed。
+
+### 代码安全（新增检测层）
+
+- **反混淆预检层（T03/T04 规避）** `scripts/deobfuscate.py`：解缠 base64 / hex / zlib 多层嵌套 blob，回查强危险 sink（os.system / eval / exec / 反向 shell / 云元数据 IP / powershell -enc 等），把绕过正则+ast 的混淆载荷重新暴露；另扫明文 C2 与云元数据 IP（169.254.169.254 等）。带层数上限 + 单层解码大小上限防炸弹。`test_deobfuscate.py` 兜底（含修正 hex 优先于 base64 的解码顺序 bug）。
+- **T05 提权** `scripts/ast_guard.py` 新增 `os.setuid/seteuid/setresuid(0)` 原生调用兜底；内容规则 `SEC-PRIVESC-001` 覆盖 pkexec / sudo / su - / doas。
+- **T06 OS 持久化** 内容规则 `SEC-PERSIST-001` 覆盖 crontab / systemctl / schtasks / launchctl / LaunchAgents / rc.local / authorized_keys / @reboot / .bashrc / 注册表自启动 / winreg。
+- **T07 工具与依赖劫持** 内容规则 `SEC-HIJACK-001` 覆盖 `sys.path.insert(0, …)` 路径注入 / LD_PRELOAD / PYTHONPATH / DOCKER_HOST / PATH 改写；合法的 `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))` 自举按「参数内含 `__file__`」豁免，注释里的 `__file__` 不算。
+- **T08 离线 SCA** `scripts/sca.py` + `scripts/vuln-deps.json`：扫技能依赖（import 顶层包 + requirements.txt 钉版），命中 typosquat 仿冒包（requets→requests 等）与已知 CVE 版本区间（pyyaml 5.3 / requests 2.31.0 等）。漏洞库 curated、本地、可增改；出网查询一律 `--offline` 禁用。
+- `scripts/gate.py` 新增 `check_deobfuscation` / `check_sca`，接入 `run_all`；`BLOCKER_SEVERITIES={critical,high}` 使上述 high/critical 命中即阻断发布。
+
+### 验证
+
+- 恶意样例（多层 base64 藏 os.system + setuid(0) + crontab + sys.path.insert(0,'/tmp/evil') + /dev/tcp 反向 shell + requets typosquat + pyyaml==5.3 CVE）全中、EXIT=1 阻断。
+- 良性样例（含合规 frontmatter）零安全误报、EXIT=0 PASS。
+- 门禁自扫零误报（合法自举豁免）；`tests/test_deobfuscate.py` 5 项、`tests/test_p0_verify.py` 全绿。
+
 ## [3.2.0] — 2026-10-13
+
+（与远端 2bbca1e / 3aa180f 合并：英文版文档 + clean-code 审计黄项 + ast_guard YAML 黑名单修正）
 
 **新增英文版文档 + 顺手清 clean-code 审计黄项（B4 / B5 / B2 + `_fm_data` 哨兵）。**
 规则定义与退出码契约一字未改 → **MINOR**。

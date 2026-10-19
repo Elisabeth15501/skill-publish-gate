@@ -1,0 +1,75 @@
+{
+  "_comment": "离线 SCA 漏洞库（T08）。纯本地、零出网。版本区间用 semver 元组比较：introduced<=v<fixed 视为命中。typosquats 命中即高风险（仿冒包几乎必然投毒）。",
+  "blessed": [
+    "requests", "pyyaml", "yaml", "urllib3", "pillow", "numpy", "pandas",
+    "openai", "httpx", "beautifulsoup4", "bs4", "lxml", "torch", "tensorflow",
+    "cryptography", "django", "flask", "fastapi", "aiohttp", "boto3", "botocore",
+    "tiktoken", "regex", "jsonschema", "markdown", "rich", "click", "typer"
+  ],
+  "typosquats": {
+    "requets": "requests",
+    "reqeusts": "requests",
+    "request": "requests",
+    "python-requests": "requests",
+    "python-request": "requests",
+    "urlib3": "urllib3",
+    "urllib": "urllib3",
+    "urllib4": "urllib3",
+    "pyymal": "pyyaml",
+    "pyyam1": "pyyaml",
+    "python-yaml": "pyyaml",
+    "crypto": "cryptography",
+    "cryptograph": "cryptography",
+    "crpytography": "cryptography",
+    "djanga": "django",
+    "django2": "django",
+    "flasik": "flask",
+    "flaskk": "flask",
+    "botot3": "boto3",
+    "boto": "boto3",
+    "numpyy": "numpy",
+    "numpu": "numpy",
+    "panadas": "pandas",
+    "panda": "pandas",
+    "torhc": "torch",
+    "tensrflow": "tensorflow",
+    "openaii": "openai",
+    "open-ai": "openai",
+    "httpx3": "httpx",
+    "beatifulsoup": "beautifulsoup4"
+  },
+  "known_vulnerable": {
+    "pyyaml": [
+      {"introduced": "0", "fixed": "5.4", "cve": "CVE-2020-1747",
+       "summary": "yaml.load 未指定 loader 时反序列化任意代码", "severity": "high"}
+    ],
+    "requests": [
+      {"introduced": "0", "fixed": "2.20.0", "cve": "CVE-2018-18074",
+       "summary": "重定向时泄漏 Authorization 头凭据", "severity": "medium"},
+      {"introduced": "0", "fixed": "2.32.0", "cve": "CVE-2024-35195",
+       "summary": ".cookies 在跨主机重定向时泄漏 .netrc 凭据", "severity": "medium"}
+    ],
+    "urllib3": [
+      {"introduced": "0", "fixed": "1.26.5", "cve": "CVE-2021-33503",
+       "summary": "method 参数超长导致 ReDoS", "severity": "high"},
+      {"introduced": "0", "fixed": "2.2.2", "cve": "CVE-2024-37891",
+       "summary": "代理鉴权头在建立连接前泄漏", "severity": "medium"}
+    ],
+    "pillow": [
+      {"introduced": "0", "fixed": "8.3.0", "cve": "CVE-2021-25287",
+       "summary": "TiffDecode 越界写", "severity": "high"}
+    ],
+    "cryptography": [
+      {"introduced": "0", "fixed": "3.3.2", "cve": "CVE-2020-36242",
+       "summary": "AES-GCM 恒定时间实现缺陷", "severity": "medium"}
+    ],
+    "django": [
+      {"introduced": "0", "fixed": "2.2.28", "cve": "CVE-2022-28346",
+       "summary": "QuerySet.annotate 整数溢出 SQL 注入", "severity": "high"}
+    ],
+    "numpy": [
+      {"introduced": "0", "fixed": "1.22.0", "cve": "CVE-2021-33430",
+       "summary": "numpy.core 多种缓冲区溢出", "severity": "medium"}
+    ]
+  }
+}

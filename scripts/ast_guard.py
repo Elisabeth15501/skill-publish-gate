@@ -48,6 +48,27 @@ _COMPILE_CALL = ("compile", "medium", "AST-COMPILE-001",
                  "compile 后接 exec/eval 会形成动态执行链",
                  "仅做语法检查可保留；若参与执行链请改为显式调用。")
 
+# T05 提权：以 root / 其他 uid 身份运行。skill 几乎永远不该这么做，
+# 命中即高可疑（A.I.G SkillTrustBench T05）。只列「明确提权」的 API，
+# 普通 os.getuid / os.geteuid（只读查询）不在此列，避免误报。
+_PRIVESC_CALLS = {
+    "os.setuid": ("high", "AST-PRIVESC-001",
+                  "os.setuid 改 uid，常配合 setuid(0) 提权到 root",
+                  "skill 不需要以其他身份运行；确需降权请用显式白名单化的固定 uid。"),
+    "os.seteuid": ("high", "AST-PRIVESC-001",
+                   "os.seteuid 改有效 uid，可绕过最小权限",
+                   "移除动态身份切换；确需降权请用显式白名单化的固定 uid。"),
+    "os.setresuid": ("high", "AST-PRIVESC-001",
+                     "os.setresuid 同时改 real/effective/saved uid",
+                     "移除动态身份切换；确需降权请用显式白名单化的固定 uid。"),
+    "os.setgid": ("medium", "AST-PRIVESC-002",
+                  "os.setgid 改 gid，可能用于提权或逃逸沙箱组",
+                  "skill 不需要改组；确需降权请用显式白名单化的固定 gid。"),
+    "os.setegid": ("medium", "AST-PRIVESC-002",
+                   "os.setegid 改有效 gid",
+                   "skill 不需要改组；确需降权请用显式白名单化的固定 gid。"),
+}
+
 # 反序列化：只列真正能实例化任意类的加载器
 _DOTTED_CALLS = {
     "pickle.loads": ("high", "AST-PICKLE-001",
@@ -219,6 +240,8 @@ def _match_dangerous(dotted: str, src: str) -> tuple:
     """
     if dotted in _DOTTED_CALLS:
         return _DOTTED_CALLS[dotted]
+    if dotted in _PRIVESC_CALLS:
+        return _PRIVESC_CALLS[dotted]
     if dotted in _BARE_CALLS:
         return _BARE_CALLS[dotted]
     if dotted == _COMPILE_CALL[0]:

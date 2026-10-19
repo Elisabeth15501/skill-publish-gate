@@ -13,13 +13,17 @@ description: >-
   「这个 skill 能不能发」「会不会被拒」「有没有凭据泄漏或 PII」「文档措辞会不会踩内容审核红线」；
   批量体检本地技能库；frontmatter 是否会被平台 CLI 静默解析失败；以及按旧名 skillhub-gate /
   ai-weekly-publish-gate 找同一道门禁的用户（2026-10 更名，CLI 与退出码不变）。
-  覆盖面：凭据/PII/恶意执行/Prompt 注入/持久化篡改/协议传染、frontmatter 硬校验、封禁文件与
+  覆盖面：凭据/PII/恶意执行（含 base64/hex/zlib 多层混淆解缠）/Prompt 注入/提权（setuid(0)/
+  pkexec/sudo/doas）/OS 持久化（crontab/systemctl/schtasks/launchctl/注册表自启动等）/工具与
+  依赖劫持（sys.path.insert(0,…)/LD_PRELOAD/PYTHONPATH/DOCKER_HOST/PATH 改写）/离线 SCA
+  （typosquat 仿冒包 + 已知依赖 CVE 钉版）/持久化篡改/协议传染、frontmatter 硬校验、封禁文件与
   超大产物包、发布产物卫生、版本一致性、依赖钉版、内容审核红线词族、agentic 指令式风险与
   MCP 工具描述投毒。四种口径：--platform skillhub(默认) / github / clawhub / ima。
-  NOT for —— 深度应用漏洞审计（SQLi / XSS / 依赖 CVE / 污点分析，交 CodeQL / Semgrep /
+  NOT for —— 深度应用漏洞审计（SQLi / XSS / 污点分析 / 运行时 CVE 实时查询，交 CodeQL / Semgrep /
   domsec / Codex Security，可用 --sarif-in 或 --deep-scan 把结果缝进来）；国内监管合规文书
   （金融/广告法/隐私法律依据，交 skill-compliance-check）；已上架 skill 的线上监控；
-  非 skill 目录的通用代码扫描。检测为纯本地正则 + 轻量 stdlib ast 兜底，零出网、零必需密钥。
+  非 skill 目录的通用代码扫描。检测为纯本地正则 + 轻量 stdlib ast 兜底 + 反混淆解缠 + 离线
+  SCA（curated 漏洞库），零出网、零必需密钥、确定性。
 when_to_use: >-
   用于「准备发布一个 skill」这个具体时点。需要的是一个本地可跑的判定（能不能发 / 会不会被拒 /
   有没有凭据或 PII），而不是一份安全审计报告或合规法律意见书。不用于深度漏洞分析、
