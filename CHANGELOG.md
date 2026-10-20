@@ -1,3 +1,29 @@
+## [3.3.0] — 2026-10-20
+
+**P1：T01/T09 深度 + MCP 14 类扩面 + 基准 harness + 报告增强（新增检测能力 → MINOR → 3.3.0）。**
+
+按 `skill-publish-gate-优化方案-对标AIG.md` 的 P1 落地。设计纪律不变：纯本地、离线、零必需密钥、确定性、fail-closed。
+
+### P1-1 T01 指令优先级劫持深度
+- `SEC-PROMPT-001` patterns 由 6 → 14 条：补齐英文（override previous/prior/system instructions、X rank(s) above Y、regardless of … execute …）与中文（始终/无论/不管 … 无视/覆盖/凌驾/优先于 … 用户/系统）指令优先级劫持句式；保留全局元语境豁免，自描述合规样本零误报。
+
+### P1-2 本地 deep 模式（不安全编码）
+- 新增 6 条规则：`INSEC-CRYPTO-001`（md5/sha1/DES/AES-ECB，medium）、`INSEC-SSRF-001`（云元数据 IP 169.254.169.254 等，high+redline，exclude `re.compile` 防自扫误报）、`INSEC-TRAVERSAL-001`（外部输入 + `../` 路径穿越，medium）、`INSEC-TMPRACE-001`（tempfile.mktemp/os.tmpnam 竞态，low）、`INSEC-HARDCODED-001`（user:pass@host 连接串，high+redline）、`INSEC-HARDCODED-002`（password=/api_key=/secret= 明文，medium，含占位符/environ 豁免）。
+
+### P1-3 MCP 14 类扩面
+- MCP 规则由 3 → 14 类：新增 `MCP-TRANSPORT-001` / `MCP-SAMPLE-001` / `MCP-ROOT-001` / `MCP-RES-001` / `MCP-SCHEMA-001` / `MCP-DYN-001` / `MCP-CMD-001` / `MCP-SECRET-001` / `MCP-PROMPT-TPL-001` / `MCP-PKG-001` / `MCP-LOG-001`；共享 MCP 自描述词表与精确 exclude，门禁自扫零 MCP 误报。
+
+### P1-4 基准 harness（自报可信度）
+- 新增 `tests/bench/cases.json`（SkillTrustBench 风格已知好/已知坏/歧义语料，覆盖 A.I.G 9 类 + SPG 平台规范）+ `tests/run_bench.py`：输出 Precision/Recall/F1/FPR。当前基线 **F1=1.000 / FPR=0.000**（13 已知坏全中、8 已知好零误报、4 歧义不误杀）。
+
+### P1-5 报告增强
+- `gate.py report()` 新增 `junit` 与 `html` 两种 `--format` 输出（保留 SARIF 双向领先 + sarif_io 指纹/降级语义）；JUnit XML 可被解析、HTML 含命中证据与免责声明。
+
+### 验证
+- 新增 `tests/test_p1_verify.py`（12）、`tests/test_p1_insecure_coding.py`（11）、`tests/test_p1_mcp.py`（全 11 类）、`tests/test_p1_report.py`（junit/html）、`tests/run_bench.py`（F1≥0.95），均并入 `tests/run_all.py`。
+- 顺手修 `test_m3_verify.py` 预存回归（P0-1/4 后 `gate.py` 新增 `deobfuscate.py`/`sca.py` 依赖，测试夹具未复制 → ModuleNotFoundError）；现全 13 套回归绿。
+- 门禁自扫零安全误报（仅 `.gitignore`/`LICENSE` 的 `FORB-001` 平台项）。
+
 ## [3.2.0] — 2026-10-17
 
 **P0：对标 Tencent AI-Infra-Guard 的 SkillTrustBench T03–T08 深度补齐（新增代码安全检测能力，向后兼容 → MINOR → 3.2.0）。**

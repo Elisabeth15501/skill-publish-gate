@@ -36,6 +36,12 @@ python scripts/gate.py dirs --dir ~/.workbuddy/skills        # 批量
 # ① 产出 SARIF 2.1.0（喂 GitHub Code Scanning 或任意 SARIF 消费方）
 python scripts/gate.py check --dir <skill目录> --format sarif -o gate.sarif
 
+# ④ 产出 JUnit XML（接 CI 测试报告 / GitLab CI / Jenkins）
+python scripts/gate.py check --dir <skill目录> --format junit -o gate-junit.xml
+
+# ⑤ 产出 HTML 报告（人工审阅，含命中证据与免责声明）
+python scripts/gate.py check --dir <skill目录> --format html -o gate.html
+
 # ② 导入外部扫描器的 SARIF（domsec / SkillSpector / Codex Security 都吃）
 python scripts/gate.py check --dir <skill目录> --sarif-in domsec.sarif
 

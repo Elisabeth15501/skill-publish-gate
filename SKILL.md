@@ -1,7 +1,7 @@
 ---
 name: skill-publish-gate
 slug: skill-publish-gate
-version: 3.2.0
+version: 3.3.0
 displayName: Skill 发布门禁（代码安全 + 平台规范）
 summary: 发布 Skill 前本地跑一遍，一次看全「代码安全」与「SkillHub/ClawHub/ima 平台规范」，命中即阻断
 tags: [skill, 发布门禁, 合规预检, 代码安全, preflight, 上架检查, skillhub, clawhub, ima, sarif, publish-gate]
@@ -18,7 +18,7 @@ description: >-
   依赖劫持（sys.path.insert(0,…)/LD_PRELOAD/PYTHONPATH/DOCKER_HOST/PATH 改写）/离线 SCA
   （typosquat 仿冒包 + 已知依赖 CVE 钉版）/持久化篡改/协议传染、frontmatter 硬校验、封禁文件与
   超大产物包、发布产物卫生、版本一致性、依赖钉版、内容审核红线词族、agentic 指令式风险与
-  MCP 工具描述投毒。四种口径：--platform skillhub(默认) / github / clawhub / ima。
+  14 类 MCP 工具描述投毒（transport / sample / root / 资源 / schema / 动态工具 / 命令执行 / 凭据 / 提示词模板 / 包 / 日志等）。四种口径：--platform skillhub(默认) / github / clawhub / ima。
   NOT for —— 深度应用漏洞审计（SQLi / XSS / 污点分析 / 运行时 CVE 实时查询，交 CodeQL / Semgrep /
   domsec / Codex Security，可用 --sarif-in 或 --deep-scan 把结果缝进来）；国内监管合规文书
   （金融/广告法/隐私法律依据，交 skill-compliance-check）；已上架 skill 的线上监控；

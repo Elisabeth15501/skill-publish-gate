@@ -1,5 +1,5 @@
 {
-  "version": "3.2.0",
+  "version": "3.3.0",
   "description": "Skill 发布门禁规范库 v3.0.0（skill 代码安全 + SkillHub/ClawHub/ima 平台规范）。数据驱动：规则写在本文件，gate.py 不含词表；新增平台只需加 platform_profiles。",
   "spec": {
     "frontmatter": {
@@ -452,7 +452,15 @@
         "disregard.{0,6}(instructions|prompt|rules)",
         "忘记.{0,4}(指令|规则|system|规定)",
         "越狱|jailbreak|JAILBREAK",
-        "\\bDAN\\b\\s*(模式|mode)?"
+        "\\bDAN\\b\\s*(模式|mode)?",
+        "override\\s+(the\\s+|your\\s+|my\\s+|all\\s+|any\\s+)?(previous|prior|above|system|earlier|user'?s?)\\s+(instructions?|prompts?|rules?|system\\s+prompt)",
+        "(system|these|this|the following|your)\\s+(instructions?|prompt|message|rule)\\s*(override|supersede|take[s]?\\s*precedence|rank[s]?\\s*(above|higher)|outrank)",
+        "rank\\s*[:=]?\\s*(system|prev\\w*|this)\\s*>\\s*(user|all|everything)",
+        "(always|regardless of|despite|no matter what)\\s*.{0,20}(execute|comply|follow|obey|run|perform)\\s+(this|the|these|it|following)",
+        "(覆盖|忽略|无视|凌驾于|推翻)[^。\\n]{0,6}(系统|用户|之前|上述|以上|原有|顶层)[^。\\n]{0,4}(指令|提示|规则|规定|prompt|system)",
+        "(系统|上述|顶层|最高)[^。\\n]{0,5}(指令|提示|优先级)[^。\\n]{0,10}(高于|大于|覆盖|凌驾|优先于|supersede|precedence|outrank)",
+        "(始终|无论|不管|即便|即使)[^。\\n]{0,14}(无视|忽略|覆盖|凌驾|优先于|高于)[^。\\n]{0,8}(用户|系统|之前|上述)",
+        "优先级\\s*(高于|大于|凌驾于)\\s*(用户|一切|所有)"
       ],
       "self_describing_markers": [
         "注入",
@@ -468,8 +476,136 @@
         "解释",
         "如何防范"
       ],
-      "description": "命中 Prompt 注入特征（要求忽略之前指令 / 越狱 / DAN 等）。协议 5.4 要求防止通过 Skill 实施安全风险；若 Skill 自身在诱导宿主模型越权或被注入，应删除。若技能在描述如何防御注入（带防护元语境），则不报。",
+      "description": "命中 Prompt 注入特征（要求忽略之前指令 / 越狱 / DAN / 指令优先级覆盖 等）。T01 深度：除「忽略之前指令」外，新增「指令优先级覆盖」话术——override system/user instructions、system instruction takes precedence / outrank、rank: system > user、always execute despite 等，目的是让一段指令凌驾于系统或用户指令之上（指令劫持）。协议 5.4 要求防止通过 Skill 实施安全风险；若 Skill 自身在诱导宿主模型越权或被注入，应删除。若技能在描述如何防御注入（带防护元语境），则不报。",
       "clause": "第5.4条（防止通过 Skill 实施安全风险，包括 Prompt 注入）"
+    },
+    {
+      "id": "INSEC-CRYPTO-001",
+      "category": "SECURITY",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "scripts"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [],
+      "patterns": [
+        "hashlib\\.(md5|sha1)\\b",
+        "\\b(md5|sha1)\\s*\\(",
+        "AES[A-Za-z0-9_]*\\(\\s*[^)]*MODE_ECB",
+        "\\b(DES|DES3|DES3?)\\b\\s*\\("
+      ],
+      "description": "T09 不安全编码：弱加密原语（md5/sha1 用于完整性或签名、DES/3DES、AES-ECB 模式）。这些原语在当前算力下可被碰撞/绕过，不应出现在安全敏感路径（口令哈希、签名、令牌）。改用 SHA-256+/Argon2/bcrypt、AES-GCM 等。属建议级（非安全用途如文件去重也提示）。",
+      "clause": "第5.4条（防止通过 Skill 实施安全风险）/ T09 不安全编码实践"
+    },
+    {
+      "id": "INSEC-SSRF-001",
+      "category": "SECURITY",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "scripts"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [],
+      "patterns": [
+        "169\\.254\\.169\\.254",
+        "metadata\\.google\\.internal",
+        "metadata\\.azure\\.net",
+        "100\\.100\\.100\\.200",
+        "fd00:ec2::254"
+      ],
+      "description": "T09 不安全编码：服务端请求伪造（SSRF）指向云元数据服务端点（169.254.169.254 / metadata.google.internal / metadata.azure.net / 100.100.100.200 / fd00:ec2::254）。这些地址返回临时凭据，命中即可能导致凭据外泄，应阻断。（定义检测正则的代码行含 re.compile 时豁免，避免本门禁自身检测器源码被误判。）",
+      "clause": "第5.4条（防止通过 Skill 实施安全风险）/ T09 不安全编码实践",
+      "exclude_patterns": [
+        "re\\.compile"
+      ]
+    },
+    {
+      "id": "INSEC-TRAVERSAL-001",
+      "category": "SECURITY",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "scripts"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [],
+      "patterns": [
+        "(request|args|params|query|input\\(|os\\.environ|getenv|sys\\.argv)\\b[^\\n]{0,40}\\.\\./",
+        "\\.\\./[^\\n]{0,40}(request|args|params|query|input\\(|os\\.environ|getenv|sys\\.argv)\\b"
+      ],
+      "description": "T09 不安全编码：路径遍历——把外部输入（request/args/params/query/env/argv）直接拼进文件路径并出现 `../`。攻击者可借 `../` 越出预期目录读/写任意文件。用 os.path.realpath + 前缀校验或 pathlib 解析后限制在工作区内。",
+      "clause": "第5.4条（防止通过 Skill 实施安全风险）/ T09 不安全编码实践"
+    },
+    {
+      "id": "INSEC-TMPRACE-001",
+      "category": "SECURITY",
+      "severity": "low",
+      "redline": false,
+      "authority_type": "best_practice",
+      "scan_targets": [
+        "scripts"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [],
+      "patterns": [
+        "tempfile\\.mktemp\\b",
+        "os\\.tmpnam\\b"
+      ],
+      "description": "T09 不安全编码：不安全的临时文件创建（tempfile.mktemp / os.tmpnam）存在预测+竞争（TOCTOU）风险，可被抢占写入。改用 tempfile.mkstemp / NamedTemporaryFile（自动选唯一名且以 O_EXCL 打开）。",
+      "clause": "第5.4条（防止通过 Skill 实施安全风险）/ T09 不安全编码实践"
+    },
+    {
+      "id": "INSEC-HARDCODED-001",
+      "category": "SECURITY",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "scripts"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [],
+      "patterns": [
+        "(mysql|postgres|postgresql|mongodb(\\+srv)?|redis|amqp|ftp)://[^\\s:/@]+:[^\\s:/@]+@"
+      ],
+      "description": "T09 不安全编码：源码内硬编码带凭据的连接串（user:password@host）。凭据随仓库/包分发即泄漏，应改从环境变量或密钥管理读取，且连接串本身不应出现在 skill 代码中。",
+      "clause": "第5.4条（防止通过 Skill 实施安全风险）/ T09 不安全编码实践"
+    },
+    {
+      "id": "INSEC-HARDCODED-002",
+      "category": "SECURITY",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "platform_policy",
+      "scan_targets": [
+        "scripts"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "environ",
+        "getenv",
+        "input(",
+        "示例",
+        "example",
+        "占位",
+        "placeholder",
+        "changeit",
+        "xxxx",
+        "your-",
+        "todo",
+        "说明",
+        "描述"
+      ],
+      "patterns": [
+        "\\b(password|passwd|api_key|apikey|secret|token)\\s*=\\s*[\\\"'][^\\\"'\\s]{4,}[\\\"']"
+      ],
+      "description": "T09 不安全编码：源码内硬编码口令/密钥字面量（password=/api_key=/secret= 后跟字面量）。本门禁已对 token 形态的强凭据做脱敏回显（SEC-CRED-001），本条覆盖「非 token 形状」的弱凭据字面量；从环境变量读取（含 environ/getenv）或明显示例/占位值不报。",
+      "clause": "第5.4条（防止通过 Skill 实施安全风险）/ T09 不安全编码实践"
     },
     {
       "id": "RED-NET-005",
@@ -940,6 +1076,448 @@
       "platform_downgrade": {
         "clawhub": "medium"
       }
+    },
+    {
+      "id": "MCP-TRANSPORT-001",
+      "category": "MCP",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "transport\\s*[:=]\\s*[\"\\']?(http|ws|tcp)[\"\\']?",
+        "url\\s*[:=]\\s*[\"\\']?http://",
+        "--transport-type\\s+(http|ws|tcp)",
+        "mcp\\s+(server|server-?run)\\s+.*--host\\s+0\\.0\\.0\\.0"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile",
+        "example",
+        "示例"
+      ],
+      "description": "MCP 传输层未加密或绑定到全网段地址（http/ws/tcp 明文传输、0.0.0.0 监听），存在中间人嗅探与未授权访问风险。",
+      "clause": "MCP 服务器应使用 stdio 或带 TLS 的 https/wss 传输；如需网络暴露须限定绑定地址并启用鉴权。"
+    },
+    {
+      "id": "MCP-SAMPLE-001",
+      "category": "MCP",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "(api[-_ ]?key|token|secret|password|credential)\\s*[:=]\\s*[\"\\']?(your|my|<insert|placeholder|example|sample|change[-_ ]?me)",
+        "(your|my|example|placeholder|sample)[-_ ]?(api[-_ ]?key|token|secret|password|credential)\\s*[:=]",
+        "<(your|insert|replace)[-_ ]?(api[-_ ]?key|token|secret|password|credential)",
+        "change[-_ ]?me",
+        "REPLACE[-_ ]?ME",
+        "insert[-_ ]?your",
+        "sample[-_ ]?(credential|key|token|secret|password)\\s*[:=]"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile"
+      ],
+      "description": "MCP 文档/代码中携带示例凭据占位符（your-api-key、example-token、change-me 等），发布后易被误用为真实凭证。",
+      "clause": "示例凭据应使用明显占位符（如 ${API_KEY}）并在文档中说明需由用户自行注入，不得出现可复制的明文样例。"
+    },
+    {
+      "id": "MCP-ROOT-001",
+      "category": "MCP",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "\"roots\"\\s*[:=]\\s*\\[[^\\]]{0,60}(/|~|C:\\\\|%USER%)",
+        "\"root\"\\s*[:=]\\s*[\"\\'](/|~|C:\\\\)",
+        "roots\\s*[:=]\\s*\\[[\"\\'](/|~|C:\\\\)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile"
+      ],
+      "description": "MCP roots 将整个文件系统根（/、~、C:\\）暴露给服务器，违反最小权限原则，可能导致全盘读取。",
+      "clause": "MCP roots 应限定为明确的工作子目录，不得授予 /、~ 或系统盘根级别的访问范围。"
+    },
+    {
+      "id": "MCP-RES-001",
+      "category": "MCP",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "file://(/(etc|proc|sys|root|home|Users|var)|[A-Za-z]:\\\\)",
+        "resource\\s*[:=]\\s*[\"\\']file://",
+        "(read|access)\\s+(system\\s+)?(file|resource)\\s*[:=].{0,30}(/etc/|c:|c:\\\\)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile"
+      ],
+      "description": "MCP 资源暴露指向敏感系统路径（/etc、/proc、系统盘根），可能泄露主机凭据与运行时信息。",
+      "clause": "MCP 资源 URI 应限定为技能自有数据目录，禁止直接暴露 /etc、/proc、/sys 或系统盘根。"
+    },
+    {
+      "id": "MCP-SCHEMA-001",
+      "category": "MCP",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "\"type\"\\s*[:=]\\s*\"any\"",
+        "\"additionalProperties\"\\s*[:=]\\s*true",
+        "inputSchema\\s*[:=].{0,60}\"type\"\\s*[:=]\\s*\"any\""
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile"
+      ],
+      "description": "MCP 工具 inputSchema 使用 type:any 或 additionalProperties:true，绕过输入类型校验，易引发注入与类型混淆。",
+      "clause": "工具输入 schema 应声明具体类型与必填字段，避免使用 any 类型或放开 additionalProperties。"
+    },
+    {
+      "id": "MCP-DYN-001",
+      "category": "MCP",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "importlib\\.import_module",
+        "__import__\\s*\\(",
+        "load_tool\\s*\\(\\s*[^)]{0,40}(dynamic|name|user|request)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile",
+        "example",
+        "示例"
+      ],
+      "description": "MCP 服务器动态加载工具/模块（importlib、__import__、动态 load_tool），若来源可控则形成远程代码执行面。",
+      "clause": "动态加载须基于白名单或签名校验；禁止依据用户输入直接决定导入的模块或工具名。"
+    },
+    {
+      "id": "MCP-CMD-001",
+      "category": "MCP",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "shell\\s*[:=]\\s*true",
+        "subprocess\\.(call|Popen|run)\\s*\\([^)]{0,50}shell\\s*=\\s*True",
+        "os\\.system\\s*\\(",
+        "eval\\s*\\(\\s*(input|request|args|params|query|os\\.environ|getenv)",
+        "exec\\s*\\(\\s*(input|request|args|params|query)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile",
+        "example",
+        "示例",
+        "说明"
+      ],
+      "description": "MCP 工具以 shell=True、os.system 或 eval/exec 处理外部输入，存在命令注入与任意代码执行风险。",
+      "clause": "命令执行应使用参数列表形式（shell=False）并对输入做白名单/转义；禁止对用户输入使用 eval/exec。"
+    },
+    {
+      "id": "MCP-SECRET-001",
+      "category": "MCP",
+      "severity": "high",
+      "redline": true,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "(api[-_]?key|token|secret|password|private[-_]?key)\\s*[:=]\\s*[\"\\'][A-Za-z0-9+/=_-]{8,}[\"\\']",
+        "Authorization\\s*[:=]\\s*[\"\\']?Bearer\\s+[A-Za-z0-9._-]{10,}",
+        "sk-[A-Za-z0-9]{20,}"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile",
+        "os\\.environ",
+        "getenv\\(",
+        "environ\\.get",
+        "example",
+        "placeholder",
+        "sample",
+        "(dummy|fake|test|xxx|xxxx)",
+        "\\$\\{",
+        "<"
+      ],
+      "description": "MCP 配置中存在疑似硬编码密钥（Bearer 令牌、sk- 前缀、明文 password=），泄露将导致凭据被直接滥用。",
+      "clause": "密钥须通过环境变量/密钥管理器注入，文档中仅保留占位符；不得出现可复制的明文凭据字面量。"
+    },
+    {
+      "id": "MCP-PROMPT-TPL-001",
+      "category": "MCP",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "\\{\\{\\s*(user|input|request|args|params|query|body)\\b",
+        "\\{%\\s*(user|input|request|args|params|query)\\b",
+        "prompt\\s*[:=].{0,50}\\{\\{.*(args|input|request)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile"
+      ],
+      "description": "MCP prompt 模板直接将外部输入（user/args/request）插值进提示词，存在提示注入与模板逃逸风险。",
+      "clause": "prompt 模板应对外部输入做隔离/转义，敏感指令与用户内容须明确分域，避免直接拼接执行。"
+    },
+    {
+      "id": "MCP-PKG-001",
+      "category": "MCP",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "npx\\s+-y\\s+[^\\s]+@latest",
+        "npm\\s+install\\s+[^\\s]+@latest",
+        "pip\\s+install\\s+[^\\s]+@latest",
+        "install\\s+[^\\s]+@latest"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile"
+      ],
+      "description": "MCP 启动配置拉取 @latest 未固定版本的包（npx/npm/pip @latest），供应链不可复现且易被投毒。",
+      "clause": "依赖应锁定版本（精确版本或 hash 锁定），避免使用 @latest 等浮动版本。"
+    },
+    {
+      "id": "MCP-LOG-001",
+      "category": "MCP",
+      "severity": "medium",
+      "redline": false,
+      "authority_type": "security",
+      "scan_targets": [
+        "docs"
+      ],
+      "patterns": [
+        "log(ger|ging)?\\.(info|debug|warning|error|write)\\s*\\([^)]*(token|secret|password|api[-_]?key|cookie|authorization)",
+        "print\\s*\\([^)]*(token|secret|password|api[-_]?key)",
+        "console\\.(log|error|debug)\\s*\\([^)]*(token|secret|password|api[-_]?key)"
+      ],
+      "use_global_meta_markers": false,
+      "self_describing_markers": [
+        "说明",
+        "描述",
+        "示例",
+        "注意",
+        "避免",
+        "禁止",
+        "不要",
+        "切勿",
+        "example",
+        "note",
+        "avoid",
+        "never",
+        "do not",
+        "don't",
+        "warning"
+      ],
+      "exclude_patterns": [
+        "re\\.compile"
+      ],
+      "description": "MCP 服务器将令牌/密钥写入日志或标准输出，存在凭据通过日志泄露的风险。",
+      "clause": "日志须脱敏，禁止输出 token/secret/password/api_key 等敏感字段的明文值。"
     }
   ],
   "layout_note": "顶层只有 version/description/rules/layout_note 四项；所有可被 _load_spec() 读到的配置都在 spec 子树里，rules 是规则数组。platform_profiles 曾放在顶层，导致 check_ima_compliance 静默全跳过（2026-10-06 修复）。"

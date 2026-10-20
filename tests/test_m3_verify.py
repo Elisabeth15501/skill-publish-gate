@@ -27,7 +27,8 @@ scripts = os.path.join(tmp, "scripts")
 rules = os.path.join(tmp, "rules")
 os.makedirs(scripts)
 os.makedirs(rules)
-for f in ("gate.py", "sarif_io.py", "config_loader.py", "ast_guard.py"):
+for f in ("gate.py", "sarif_io.py", "config_loader.py", "ast_guard.py",
+          "deobfuscate.py", "sca.py"):
     with open(os.path.join(SCRIPTS, f), encoding="utf-8") as fin, \
             open(os.path.join(scripts, f), "w", encoding="utf-8") as fout:
         fout.write(fin.read())

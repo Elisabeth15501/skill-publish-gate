@@ -25,6 +25,8 @@ Skill 发布门禁（代码安全 + 平台规范）— skill-publish-gate
 
 v2.1.0 新增（缝接层，全部可选、默认关闭）：
     --format sarif        产出 SARIF 2.1.0（喂 GitHub Code Scanning）
+    --format junit        产出 JUnit XML（CI 原生断言）
+    --format html         产出人读 HTML 报告（严重度分布 + 命中明细）
     --sarif-in FILE       导入外部扫描器（domsec/SkillSpector/Codex Security）的 SARIF
     --baseline FILE       抑制「确认过的误报」（跨运行指纹）
     --config FILE         外部配置：阈值 / 封禁文件 / 规则追加（只许更严）
@@ -62,7 +64,7 @@ GATE_DISCLAIMER = (
     "免责声明：本门禁仅做本地规范预检，不构成 SkillHub 审核保证。"
     "最终能否上架由 SkillHub 三线审核决定，责任由开发者自行承担。"
 )
-GATE_VERSION = "3.2.0"
+GATE_VERSION = "3.3.0"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1339,6 +1341,10 @@ class SkillHubGate:
             doc["runs"][0]["properties"]["disclaimer"] = GATE_DISCLAIMER
             doc["runs"][0]["properties"]["platform"] = self.platform
             txt = json.dumps(doc, indent=2, ensure_ascii=False)
+        elif fmt == "junit":
+            txt = self._to_junit(v)
+        elif fmt == "html":
+            txt = self._to_html(v)
         else:
             lines = []
             lines.append(f"╔══ Skill 发布门禁 ══ {self.skill_name}")
@@ -1392,6 +1398,101 @@ class SkillHubGate:
                 f.write(txt)
             print(f"报告已写入: {output_path}")
         return txt
+
+    @staticmethod
+    def _xml_escape(s):
+        return ((s or "").replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace('"', "&quot;"))
+
+    def _to_junit(self, v):
+        """JUnit XML（CI 原生）：每条 issue 一个失败 testcase，干净则一个通过项。"""
+        esc = self._xml_escape
+        issues = self.issues
+        tests = max(len(issues), 1)
+        failures = len(issues)
+        out = ['<?xml version="1.0" encoding="UTF-8"?>']
+        out.append('<testsuites name="skill-publish-gate" tests="%d" failures="%d">'
+                   % (tests, failures))
+        out.append('  <testsuite name="skill-publish-gate" tests="%d" '
+                   'failures="%d" skipped="0" time="0">' % (tests, failures))
+        if not issues:
+            out.append('    <testcase classname="skill-publish-gate" name="no-issues" />')
+        else:
+            for issue in issues:
+                name = "%s::%s:%s" % (issue.get("rule_id"), issue.get("file"),
+                                      issue.get("line"))
+                cls = "skill-publish-gate.%s" % issue.get("category", "")
+                out.append('    <testcase classname="%s" name="%s">'
+                           % (esc(cls), esc(name)))
+                msg = "[%s] %s" % (issue.get("severity", "").upper(),
+                                   issue.get("found", ""))
+                out.append('      <failure type="%s" message="%s">'
+                           % (esc(issue.get("rule_id", "")), esc(msg)))
+                out.append('        %s' % esc(issue.get("recommendation", "")))
+                out.append('      </failure>')
+                out.append('    </testcase>')
+        out.append('  </testsuite>')
+        out.append('</testsuites>')
+        return "\n".join(out)
+
+    def _to_html(self, v):
+        """人读 HTML：结论横幅 + 严重度分布 + 命中明细表。"""
+        esc = self._xml_escape
+        color = {"PASS": "#2e7d32", "NEEDS_FIX": "#f9a825",
+                 "BLOCKED": "#c62828"}.get(v["verdict"], "#757575")
+        sc = {k: v.get(k, 0) for k in ("critical", "high", "medium", "low")}
+        if not self.issues:
+            rows_html = ('<tr><td colspan="5" style="color:#2e7d32">'
+                         '未发现规范问题 \u2713</td></tr>')
+        else:
+            row_parts = []
+            for issue in sorted(self.issues,
+                                key=lambda x: SEVERITY_ORDER.get(x["severity"], 99)):
+                flag = " \u2757" if issue.get("redline") else ""
+                loc = "%s:%s%s" % (issue.get("file", ""), issue.get("line", ""), flag)
+                row_parts.append(
+                    "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+                    % (esc(issue.get("severity", "").upper()),
+                       esc(issue.get("rule_id", "")),
+                       esc(loc),
+                       esc(issue.get("category", "")),
+                       esc(issue.get("found", "")))
+                )
+            rows_html = "\n".join(row_parts)
+        style = ("<style> body{font-family:sans-serif;margin:24px;color:#222}"
+                 " .banner{padding:16px 20px;border-radius:8px;color:#fff;"
+                 "font-size:20px;font-weight:600}"
+                 " .dist span{display:inline-block;margin-right:14px;padding:4px 10px;"
+                 "border-radius:4px;color:#fff;font-size:13px}"
+                 " table{border-collapse:collapse;width:100%;margin-top:16px}"
+                 " th,td{border:1px solid #ddd;padding:8px 10px;text-align:left;"
+                 "font-size:13px;vertical-align:top}"
+                 " th{background:#f5f5f5}</style>")
+        return (
+            "<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\">"
+            "<title>Skill 发布门禁报告</title>" + style + "</head><body>"
+            "<h1>Skill 发布门禁报告</h1>"
+            "<div class=\"banner\" style=\"background:%s\">"
+            "\u7ed3\u8bba\uff1a%s\uff08blockers=%s, warnings=%s, redlines=%s\uff09</div>"
+            % (color, esc(v["verdict"]), v["blockers"], v["warnings"], v["redlines"])
+            + "<div class=\"dist\">"
+            "<span style=\"background:#c62828\">critical %s</span>" % sc["critical"]
+            + "<span style=\"background:#ef6c00\">high %s</span>" % sc["high"]
+            + "<span style=\"background:#f9a825\">medium %s</span>" % sc["medium"]
+            + "<span style=\"background:#757575\">low %s</span>" % sc["low"]
+            + "</div>"
+            "<p>\u6280\u80fd\uff1a%s \u2502 \u5e73\u53f0\uff1a%s "
+            "\u2502 \u89c4\u8303\u7248\u672c\uff1a%s</p>"
+            % (esc(self.skill_name), esc(self.platform),
+               esc(getattr(self, "spec_meta", {}).get("version", "")))
+            + "<table><thead><tr><th>\u4e25\u91cd\u5ea6</th><th>\u89c4\u5219</th>"
+            "<th>\u4f4d\u7f6e</th><th>\u7c7b\u522b</th><th>\u8bc1\u636e</th></tr></thead>"
+            "<tbody>" + rows_html + "</tbody></table>"
+            "<p style=\"margin-top:18px;color:#666;font-size:12px\">%s</p>"
+            % esc(GATE_DISCLAIMER)
+            + "</body></html>"
+        )
+
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1932,7 +2033,7 @@ def main():
 
     p_check = sub.add_parser("check", help="对单个 skill 做门禁检查（默认）")
     p_check.add_argument("--dir", "-d", default=".", help="目标 skill 目录（默认当前目录）")
-    p_check.add_argument("--format", "-f", choices=["text", "json", "sarif"], default="text",
+    p_check.add_argument("--format", "-f", choices=["text", "json", "sarif", "junit", "html"], default="text",
                          help="报告格式；sarif 为 SARIF 2.1.0（喂 GitHub Code Scanning）")
     p_check.add_argument("--output", "-o", default=None, help="输出到文件")
     p_check.add_argument("--platform", "-p", default=None,

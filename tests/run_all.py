@@ -26,6 +26,11 @@ TESTS = [
     "test_modules.py",       # 三个模块的单元测试（含 P0-1/3 的攻击断言）
     "test_e2e.py",           # 端到端 fixture（C3/C4/ast/SARIF/config/baseline/ima）
     "test_p0_verify.py",     # 三个原始攻击 + S2/S6 的原样重打
+    "test_p1_verify.py",       # P1-1 T01 指令优先级劫持深度（SEC-PROMPT-001 扩面）
+    "test_p1_insecure_coding.py",  # P1-2 T09 本地 deep 模式（INSEC-* 6 条）
+    "test_p1_mcp.py",          # P1-3 MCP 规则 3→14 类扩面
+    "test_p1_report.py",       # P1-5 报告增强 junit + html
+    "run_bench.py",            # P1-4 基准 harness（自报 F1>=0.95）
     "test_p17_verify.py",    # 跨工具去重 + 指纹抗行号漂移
     "test_m3_verify.py",     # feedback 原子写与并发
     "test_g12_verify.py",    # 建议级 G1（全量遍历）+ G2（多行调用源码）验证

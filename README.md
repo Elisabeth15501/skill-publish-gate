@@ -177,6 +177,8 @@ python scripts/gate.py check --dir <skill目录> --learn '{"type":"warn","patter
 | 入口 | 做什么 | 什么时候用 |
 |---|---|---|
 | `--format sarif` | 产出 SARIF 2.1.0 | 接 GitHub Code Scanning，或喂给别的工具 |
+| `--format junit` | 产出 JUnit XML | 接 CI 测试报告 / GitLab CI / Jenkins |
+| `--format html` | 产出 HTML 报告 | 人工审阅，含命中证据与免责声明 |
 | `--sarif-in FILE` | 吃任意外部 SARIF | 已有 domsec / SkillSpector / Codex Security 的报告 |
 | `--deep-scan CMD` | 直接调外部扫描器 | 想在一次门禁里串起深度扫描 |
 

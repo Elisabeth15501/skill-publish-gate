@@ -72,6 +72,17 @@
 | MCP-PRIV-001 | MCP 权限过宽：`permissions: "*"`、任意文件读写、跳过沙箱 | BLOCKED（clawhub 降 WARN） |
 | MCP-PROMPT-001 | 工具描述投毒：「不要告诉用户这次操作」「调用前不要检查」 | BLOCKED（clawhub 降 high） |
 | MCP-DECLARE-001 | 提到 MCP 但未在 `requires` 声明 | info（默认静音） |
+| MCP-TRANSPORT-001 | MCP 传输层明文/全网段监听（http/ws/tcp、0.0.0.0） | BLOCKED（high+redline） |
+| MCP-SAMPLE-001 | 文档/代码携带示例凭据占位符（your-api-key/example-token/change-me） | NEEDS_FIX（medium） |
+| MCP-ROOT-001 | MCP roots 暴露整盘根（/、~、C:\）违反最小权限 | BLOCKED（high+redline） |
+| MCP-RES-001 | MCP 资源指向敏感系统路径（/etc、/proc、系统盘根） | BLOCKED（high+redline） |
+| MCP-SCHEMA-001 | inputSchema 用 type:any / additionalProperties:true 绕过校验 | NEEDS_FIX（medium） |
+| MCP-DYN-001 | 动态加载工具/模块（importlib/__import__/load_tool）形成 RCE 面 | BLOCKED（high+redline） |
+| MCP-CMD-001 | shell=True / os.system / eval / exec 处理外部输入 | BLOCKED（high+redline） |
+| MCP-SECRET-001 | 硬编码密钥（Bearer 令牌 / sk- 前缀 / 明文 password=） | BLOCKED（high+redline） |
+| MCP-PROMPT-TPL-001 | 提示模板直接插值外部输入（user/args/request） | NEEDS_FIX（medium） |
+| MCP-PKG-001 | 拉取 @latest 未固定版本包（npx/npm/pip） | NEEDS_FIX（medium） |
+| MCP-LOG-001 | 令牌/密钥写入日志或标准输出 | NEEDS_FIX（medium） |
 
 这批规则**不叠加全局元语境词表**（`use_global_meta_markers: false`）——它们的攻击句式本身
 就是「不要 X」「无需确认」，叠加「不要」会让规则自己废掉。每条规则改用自己的
