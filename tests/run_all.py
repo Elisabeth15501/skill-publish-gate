@@ -23,36 +23,42 @@ PY = sys.executable
 PER_TEST_TIMEOUT = 600
 
 TESTS = [
-    "test_modules.py",       # 三个模块的单元测试（含 P0-1/3 的攻击断言）
-    "test_e2e.py",           # 端到端 fixture（C3/C4/ast/SARIF/config/baseline/ima）
-    "test_p0_verify.py",     # 三个原始攻击 + S2/S6 的原样重打
-    "test_p1_verify.py",       # P1-1 T01 指令优先级劫持深度（SEC-PROMPT-001 扩面）
-    "test_p1_insecure_coding.py",  # P1-2 T09 本地 deep 模式（INSEC-* 6 条）
-    "test_p1_mcp.py",          # P1-3 MCP 规则 3→14 类扩面
-    "test_p1_report.py",       # P1-5 报告增强 junit + html
-    "run_bench.py",            # P1-4 基准 harness（自报 F1>=0.95）
-    "test_p17_verify.py",    # 跨工具去重 + 指纹抗行号漂移
-    "test_m3_verify.py",     # feedback 原子写与并发
-    "test_g12_verify.py",    # 建议级 G1（全量遍历）+ G2（多行调用源码）验证
-    "test_g3_verify.py",     # 建议级 G3（dirs 继承 check 参数 + 三档退出码契约）
-    "test_en_docs.py",       # 英文版一致性（共享源不变量 + 引用 ID 真实存在 + 防跨语言漂移）
+    ("test_modules.py", "py"),       # 三个模块的单元测试（含 P0-1/3 的攻击断言）
+    ("test_e2e.py", "py"),           # 端到端 fixture（C3/C4/ast/SARIF/config/baseline/ima）
+    ("test_p0_verify.py", "py"),     # 三个原始攻击 + S2/S6 的原样重打
+    ("test_p1_verify.py", "py"),     # P1-1 T01 指令优先级劫持深度（SEC-PROMPT-001 扩面）
+    ("test_p1_insecure_coding.py", "py"),  # P1-2 T09 本地 deep 模式（INSEC-* 6 条）
+    ("test_p1_mcp.py", "py"),        # P1-3 MCP 规则 3→14 类扩面
+    ("test_p1_report.py", "py"),     # P1-5 报告增强 junit + html
+    ("run_bench.py", "py"),          # P1-4 基准 harness（自报 F1>=0.95）
+    ("test_p17_verify.py", "py"),    # 跨工具去重 + 指纹抗行号漂移
+    ("test_m3_verify.py", "py"),     # feedback 原子写与并发
+    ("test_g12_verify.py", "py"),    # 建议级 G1（全量遍历）+ G2（多行调用源码）验证
+    ("test_g3_verify.py", "py"),     # 建议级 G3（dirs 继承 check 参数 + 三档退出码契约）
+    ("test_en_docs.py", "py"),       # 英文版一致性（共享源不变量 + 引用 ID 真实存在 + 防跨语言漂移）
+    ("test_pytest_modules.py", "pytest"),  # P2/P3 核心模块单测（ast/sarif/config/deob/sca/gate）
+    ("test_pytest_p2p3.py", "pytest"),     # P2/P3 新能力（远程/归档 + 适配器 + SBOM + 双向对标 + 多语言）
 ]
 
 
 def main() -> int:
     results = []
-    for name in TESTS:
+    for name, kind in TESTS:
         path = os.path.join(HERE, name)
         if not os.path.isfile(path):
             results.append((name, "SKIP", 0.0, "文件不存在"))
             continue
+        # pytest 文件需以 `python -m pytest` 驱动；其余自带 __main__ 入口直接跑
+        cmd = [PY, "-m", "pytest", path, "-q"] if kind == "pytest" else [PY, path]
         t0 = time.perf_counter()
         try:
-            proc = subprocess.run([PY, path], capture_output=True, text=True,
+            proc = subprocess.run(cmd, capture_output=True, text=True,
                                   timeout=PER_TEST_TIMEOUT, check=False)
             dt = time.perf_counter() - t0
+            # 取最后一行实质输出作备注（pytest -q 末行是总结，脚本末行是断言小结）
+            tail = (proc.stdout or "").strip().splitlines() or (proc.stderr or "").strip().splitlines()
             results.append((name, "PASS" if proc.returncode == 0 else "FAIL", dt,
-                            (proc.stdout or "").strip().splitlines()[-1] if proc.stdout else ""))
+                            tail[-1] if tail else ""))
         except subprocess.TimeoutExpired:
             dt = time.perf_counter() - t0
             results.append((name, "TIMEOUT", dt, f"超过 {PER_TEST_TIMEOUT}s"))

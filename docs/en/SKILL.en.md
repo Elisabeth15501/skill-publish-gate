@@ -103,7 +103,7 @@ rounds**; the 5 steps close the task.
 This gate performs a local spec pre-check and static security scan only. It does NOT constitute a publishing guarantee for any platform. The final publishability is decided by each platform's own review; responsibility lies with the skill author.
 ## Machine-verifiable invariants (injected by gen_en_docs.py, do not hand-edit)
 
-- **GATE_VERSION / spec_version**: `3.3.0` (must equal `rules/skillhub-spec.json` `version`)
+- **GATE_VERSION / spec_version**: `3.4.0` (must equal `rules/skillhub-spec.json` `version`)
 - **Exit-code contract**: `PASS`=`0` (No issues. Publishable.) | `NEEDS_FIX`=`2` (Warnings only (medium/low). Fix, or explicitly say 'non-blocking but recommended'.) | `BLOCKED`=`1` (At least one blocker. Must fix, else rejected or delisted.)
 - **Rule IDs / CLI flags**: authoritative source is `rules/skillhub-spec.json` (`rules[].id`) + `scripts/ast_guard.py` (AST-*) + `scripts/gate.py` argparse; the English docs above mirror the Chinese docs and do not restate the full ID list. Drift is caught by `tests/test_en_docs.py` (recomputes the data source and asserts the invariant block version matches spec.json).
 - **English disclaimer**: This gate performs a local spec pre-check and static security scan only. It does NOT constitute a publishing guarantee for any platform. The final publishability is decided by each platform's own review; responsibility lies with the skill author.

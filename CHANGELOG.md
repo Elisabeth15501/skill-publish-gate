@@ -1,3 +1,36 @@
+## [3.4.0] — 2026-10-21
+
+**P2 + P3：远程/归档扫描 + 适配器 SDK + SBOM + 双向对标（SARIF-in）+ 多语言报告（新增接入面，向后兼容 → MINOR → 3.4.0）。**
+
+按 `skill-publish-gate-优化方案-对标AIG.md` 的 P2 / P3 落地。设计纪律不变：纯本地、离线、零必需密钥、确定性、fail-closed；深度层（外部 SARIF / 适配器 / deep-scan）结果一律封顶 medium、标 `source=l2`、redline=False，永不单独决定发布与否。
+
+### P2-1 远程 / 归档扫描（`scripts/gate.py` 新增 `_acquire_target`）
+- `--repo <git-url>`：发布前把远程仓库 `git clone --depth 1` 到沙箱目录再扫（复用现有 `run_all`，不重造判定）；`--archive <file.zip|.skill>`：按 zip 解包到临时目录再扫。
+- `--offline` 硬开关：离线模式下禁止一切出网动作（repo 克隆 / archive URL 下载），违反即 exit 2——本地归档文件不受限（零出网）。
+- 不认识的形态（非 git、非 zip）一律拒绝并报错，**绝不静默按空目录扫**；退出前调用方清理临时目录。
+
+### P2-2 适配器 SDK（`scripts/adapters.py` + `scripts/adapters.d/`）
+- 统一 `scan(target) -> issues` 契约 + L2 降级 + 指纹归一化；`adapters.d/` 注册表加载（`load_registry` / `run_adapter` / `scan_with_adapter`）。
+- 内置四个占位适配器：`domsec` / `skillspector` / `codex_security` / `clawscan`，一行 `--adapter <name>` 即可把任意外部扫描器缝进工作流；未知适配器不崩、只出 note。
+
+### P2-3 SBOM 导出（`scripts/sca.py` 新增 `to_sbom`）
+- 导出 CycloneDX 1.5（`bomFormat=CycloneDX`、components 含 `purl`，npm/pypi 生态判定）；随 `--report` JSON 输出，可在发布审计链里追溯依赖成分。
+
+### P3-1 双向对标（`cross_verify`）
+- `--sarif-in` 吃 A.I.G / 任意外部扫描器的 SARIF 2.1.0，与本门禁结果做差异 / 共识统计：`common` / `spg_only` / `ext_only` / `spg_total` / `ext_total`，写进报告「双向对标」段，明确「谁报了谁没报」。
+
+### P3-2 deferred 边界固化（`SKILL.md` §0.1.1）
+- 把四类明确不内置的能力（运行时 AI 基建 CVE 扫描 / 跨平台 Agent 工作流 / 完整越狱模糊 / LLM 语义推理作判定层）写入硬约束，原因写清（破坏离线/确定性/零密钥/fail-closed 哲学），L2 封顶 medium 作为铁则。
+
+### P3-3 多语言报告（`report(fmt, output_path, lang)`）
+- 新增 `--lang {zh,en}`：text / html / json 三格式均支持中英双语；`_i18n` 字典驱动，未知语言回退 zh。门禁可嵌进英文 CI 产物链。
+
+### 验证
+- 新增 `tests/conftest.py`（把 `scripts/` 注入 `sys.path` 使模块可 import）+ `tests/test_pytest_modules.py`（44 项，覆盖 ast_guard / sarif_io / config_loader / deobfuscate / sca / gate 核心与边界）+ `tests/test_pytest_p2p3.py`（覆盖 --repo / --archive / --offline / --lang / --adapter / --sbom / --sarif-in 交叉验证）。
+- 两件套并入 `tests/run_all.py`（pytest 文件以 `python -m pytest -q` 驱动），全 15 套回归绿；门禁自扫零安全误报。
+
+---
+
 ## [3.3.0] — 2026-10-20
 
 **P1：T01/T09 深度 + MCP 14 类扩面 + 基准 harness + 报告增强（新增检测能力 → MINOR → 3.3.0）。**

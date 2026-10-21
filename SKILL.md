@@ -1,7 +1,7 @@
 ---
 name: skill-publish-gate
 slug: skill-publish-gate
-version: 3.3.0
+version: 3.4.0
 displayName: Skill 发布门禁（代码安全 + 平台规范）
 summary: 发布 Skill 前本地跑一遍，一次看全「代码安全」与「SkillHub/ClawHub/ima 平台规范」，命中即阻断
 tags: [skill, 发布门禁, 合规预检, 代码安全, preflight, 上架检查, skillhub, clawhub, ima, sarif, publish-gate]
@@ -66,6 +66,21 @@ disclaimer: 本门禁仅做本地规范预检与静态安全扫描，不构成�
 - 前称 `skillhub-gate` / `ai-weekly-publish-gate`，2026-10 统一为本名。CLI、退出码、
   规则库、tag 序列全部不变，`v1.0.0`~`v2.2.1` 是同一条提交线。遇到旧名引用不要当成另一个技能。
 
+### 0.1.1 明确不做（deferred 边界，v3.4.0 固化）
+
+本门禁定位是「发布前门禁」（静态可含 → 能不能发），以下四类**不内置**，一律通过
+`--deep-scan` / `--sarif-in` / `--adapter` 适配器承接。原因不是「做不了」，而是它们
+会破坏本门禁的四条不可妥协设计哲学（离线、确定性、零密钥、fail-closed）：
+
+1. **运行时 AI 基建 CVE 扫描**：需连活服务做指纹比对（A.I.G 的「AI Infra 漏洞扫描」），
+   超出「发布门禁」边界。
+2. **跨平台 Agent 工作流扫描**（Dify/Coze 等）：需运行时/多代理框架上下文。
+3. **完整越狱模糊测试**：需 LLM + 策划数据集，成本高且易误报，不适合发布前确定性门禁。
+4. **LLM 语义推理作为判定层**：实测 L2 档位 FPR 约 6–18%，会误伤发布；且破坏离线/零成本。
+
+**铁则**：深度层（外部 SARIF / 适配器 / deep-scan）结果一律**封顶 medium、标 source=l2、
+redline=False**，**永远不能单独决定发布与否**——只能作为线索，L0 自身结论才是发布判定的依据。
+
 ### 0.2 退出码契约 — 判定以此为准
 
 | verdict | exit | 含义 | 你该做什么 |
@@ -114,6 +129,9 @@ disclaimer: 本门禁仅做本地规范预检与静态安全扫描，不构成�
 
 - **输入**：Step 1 的命令。需要机器可读就加 `--format json`；批量用 `dirs`。
 - **动作**：执行。要看默认静音的 INFO 级命中（出站代理等）加 `--show-info`。
+  v3.4.0 起还支持 `--repo <git-url>`（克隆远程后审）/ `--archive <zip>`（解包后审）/
+  `--adapter <name>`（缝外部扫描器）/ `--sbom`（JSON 报告附 CycloneDX 成分清单）/
+  `--lang {zh,en}`（中英双语报告）；详见 `docs/en/cli-reference.en.md`「Acquisition & output」。
 - **输出**：verdict + exit code；`--format json` 时还有 `issues[]`（每条含
   `rule_id` / `severity` / `file` / `line` / `found` / `recommendation`）。
 - **失败兜底**：脚本缺 PyYAML 会自动尝试安装；装不上则作为 BLOCKER 报错退出，

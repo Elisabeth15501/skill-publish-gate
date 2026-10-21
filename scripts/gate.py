@@ -48,8 +48,12 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.request
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -64,7 +68,7 @@ GATE_DISCLAIMER = (
     "免责声明：本门禁仅做本地规范预检，不构成 SkillHub 审核保证。"
     "最终能否上架由 SkillHub 三线审核决定，责任由开发者自行承担。"
 )
-GATE_VERSION = "3.3.0"
+GATE_VERSION = "3.4.0"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1316,7 +1320,48 @@ class SkillHubGate:
 
     # ── 报告 ──
 
-    def report(self, fmt="text", output_path=None) -> str:
+    # P3-3 多语言报告：UI 文案中英文对照（A.I.G 多语言 UI 的对应项）。
+    # 只覆盖「人读」的文本/HTML 固定标签；json/sarif 是数据，不翻译。
+    _I18N = {
+        "zh": {
+            "verdict": "结论", "skill": "技能", "dir": "目录", "platform": "平台",
+            "issues": "问题列表", "severity": "严重度", "rule": "规则",
+            "location": "位置", "category": "类别", "evidence": "证据",
+            "findings": "命中明细", "no_issue": "未发现规范问题 ✓",
+            "must_fix": "必须修复 blocker 后才能发布，否则被平台拒绝/下架。",
+            "suggest_fix": "仅有建议项，建议修复后发布。",
+            "info_section": "ℹ️ INFO 级（默认静音，人工确认定位）",
+            "cross_title": "双向对标（SPG vs 外部 SARIF）",
+            "cross_common": "双方共识", "cross_spg_only": "仅 SPG 报出",
+            "cross_ext_only": "仅外部报出", "report_written": "报告已写入",
+            "sbom_title": "软件成分清单（SBOM / CycloneDX）",
+            "spec_ver": "规范版本",
+        },
+        "en": {
+            "verdict": "Verdict", "skill": "Skill", "dir": "Directory",
+            "platform": "Platform", "issues": "Findings", "severity": "Severity",
+            "rule": "Rule", "location": "Location", "category": "Category",
+            "evidence": "Evidence", "findings": "Detailed Findings",
+            "no_issue": "No spec issues found ✓",
+            "must_fix": "Must fix blockers before publishing, or the platform "
+                        "will reject/takedown it.",
+            "suggest_fix": "Only recommendations; fix before publishing is advised.",
+            "info_section": "ℹ️ INFO level (muted by default, locate manually)",
+            "cross_title": "Cross-verification (SPG vs external SARIF)",
+            "cross_common": "Agreed by both", "cross_spg_only": "SPG-only",
+            "cross_ext_only": "External-only", "report_written": "Report written to",
+            "sbom_title": "Software Bill of Materials (SBOM / CycloneDX)",
+            "spec_ver": "Spec version",
+        },
+    }
+
+    @staticmethod
+    def _i18n(key: str, lang: str) -> str:
+        return SkillHubGate._I18N.get(lang, SkillHubGate._I18N["zh"]).get(
+            key, SkillHubGate._I18N["zh"][key])
+
+    def report(self, fmt="text", output_path=None, lang="zh", cross=None,
+               sbom=None) -> str:
         v = self.verdict()
         if fmt == "json":
             result = {
@@ -1330,6 +1375,10 @@ class SkillHubGate:
                 "issues": self.issues,
                 "info_hits": self.info_hits,
             }
+            if cross is not None:
+                result["cross_verify"] = cross
+            if sbom is not None:
+                result["sbom"] = sbom
             txt = json.dumps(result, indent=2, ensure_ascii=False)
         elif fmt == "sarif":
             # SARIF 自带严重度与位置，不走 text 渲染；disclaimer 放 properties 里
@@ -1344,28 +1393,29 @@ class SkillHubGate:
         elif fmt == "junit":
             txt = self._to_junit(v)
         elif fmt == "html":
-            txt = self._to_html(v)
+            txt = self._to_html(v, lang)
         else:
             lines = []
             lines.append(f"╔══ Skill 发布门禁 ══ {self.skill_name}")
             lines.append(f"║ 目录：{self.target_dir}")
             lines.append(f"║ 平台：{self.platform}")
             icon = {"PASS": "✅", "NEEDS_FIX": "⚠️", "BLOCKED": "🛑"}[v["verdict"]]
-            lines.append(f"║ 结论：{icon} {v['verdict']}  "
+            _ = self._i18n
+            lines.append(f"║ {_( 'verdict', lang)}：{icon} {v['verdict']}  "
                          f"(blockers={v['blockers']}, warnings={v['warnings']}, "
                          f"redlines={v['redlines']})")
-            lines.append(f"║ 问题：critical={v['critical']} high={v['high']} "
+            lines.append(f"║ {_( 'issues', lang)}：critical={v['critical']} high={v['high']} "
                          f"medium={v['medium']} low={v['low']}")
             if self.config_applied:
                 lines.append(f"║ 外部配置生效 {len(self.config_applied)} 项："
                              f"{'; '.join(self.config_applied)}")
             if v["verdict"] == "BLOCKED":
-                lines.append("║ → 必须修复 blocker 后才能发布，否则被平台拒绝/下架。")
+                lines.append(f"║ → {_( 'must_fix', lang)}")
             elif v["verdict"] == "NEEDS_FIX":
-                lines.append("║ → 仅有建议项，建议修复后发布。")
-            lines.append("╠══ 问题列表 ══")
+                lines.append(f"║ → {_( 'suggest_fix', lang)}")
+            lines.append(f"╠══ {_( 'issues', lang)} ══")
             if not self.issues:
-                lines.append("║  未发现规范问题 ✓")
+                lines.append(f"║  {_( 'no_issue', lang)}")
             else:
                 for i, issue in enumerate(sorted(
                     self.issues, key=lambda x: SEVERITY_ORDER.get(x["severity"], 99)
@@ -1383,11 +1433,20 @@ class SkillHubGate:
                     if i < len(self.issues):
                         lines.append("║  ──────────────────────")
             if self.info_hits and self.show_info:
-                lines.append("╠══ ℹ️ INFO 级（默认静音，人工确认定位）══")
+                lines.append(f"╠══ {_( 'info_section', lang)} ══")
                 for h in self.info_hits:
                     lines.append(f"║ [INFO] ({h['category']}) {h['file']}:{h['line']}")
                     lines.append(f"║   → {h['found']}")
                     lines.append(f"║   建议：{h['recommendation']}")
+            if cross is not None:
+                lines.append(f"╠══ {_( 'cross_title', lang)} ══")
+                lines.append(f"║ {_( 'cross_common', lang)}：{cross['common']}  "
+                             f"{_( 'cross_spg_only', lang)}：{cross['spg_only']}  "
+                             f"{_( 'cross_ext_only', lang)}：{cross['ext_only']}"
+                             f"（SPG={cross['spg_total']} / 外部={cross['ext_total']}）")
+            if sbom is not None:
+                lines.append(f"╠══ {_( 'sbom_title', lang)} ══")
+                lines.append(f"║ 组件数：{sbom.get('component_count', 0)}")
             lines.append("╚" + "═" * 50)
             lines.append("")
             lines.append(GATE_DISCLAIMER)
@@ -1396,7 +1455,7 @@ class SkillHubGate:
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(txt)
-            print(f"报告已写入: {output_path}")
+            print(f"{self._i18n('report_written', lang)}: {output_path}")
         return txt
 
     @staticmethod
@@ -1435,15 +1494,26 @@ class SkillHubGate:
         out.append('</testsuites>')
         return "\n".join(out)
 
-    def _to_html(self, v):
+    def _to_html(self, v, lang="zh"):
         """人读 HTML：结论横幅 + 严重度分布 + 命中明细表。"""
         esc = self._xml_escape
+        _ = self._i18n
         color = {"PASS": "#2e7d32", "NEEDS_FIX": "#f9a825",
                  "BLOCKED": "#c62828"}.get(v["verdict"], "#757575")
         sc = {k: v.get(k, 0) for k in ("critical", "high", "medium", "low")}
+        # P3-3 多语言：标题与表头随 --lang 切换（en 用 ASCII 直写，zh 沿用 \u 转义）
+        if lang == "en":
+            html_lang, title, h_title = "en", "Skill Publish Gate Report", "Skill Publish Gate Report"
+            th = "<th>Severity</th><th>Rule</th><th>Location</th><th>Category</th><th>Evidence</th>"
+            no_issue = "No spec issues found &#10003;"
+        else:
+            html_lang, title, h_title = "zh", "Skill 发布门禁报告", "Skill 发布门禁报告"
+            th = ("<th>\u4e25\u91cd\u5ea6</th><th>\u89c4\u5219</th>"
+                  "<th>\u4f4d\u7f6e</th><th>\u7c7b\u522b</th><th>\u8bc1\u636e</th>")
+            no_issue = "未发现规范问题 \u2713"
         if not self.issues:
             rows_html = ('<tr><td colspan="5" style="color:#2e7d32">'
-                         '未发现规范问题 \u2713</td></tr>')
+                         + no_issue + '</td></tr>')
         else:
             row_parts = []
             for issue in sorted(self.issues,
@@ -1469,24 +1539,25 @@ class SkillHubGate:
                  "font-size:13px;vertical-align:top}"
                  " th{background:#f5f5f5}</style>")
         return (
-            "<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\">"
-            "<title>Skill 发布门禁报告</title>" + style + "</head><body>"
-            "<h1>Skill 发布门禁报告</h1>"
-            "<div class=\"banner\" style=\"background:%s\">"
-            "\u7ed3\u8bba\uff1a%s\uff08blockers=%s, warnings=%s, redlines=%s\uff09</div>"
-            % (color, esc(v["verdict"]), v["blockers"], v["warnings"], v["redlines"])
+            "<!DOCTYPE html><html lang=\"%s\"><head><meta charset=\"utf-8\">"
+            "<title>%s</title>" % (html_lang, title) + style + "</head><body>"
+            "<h1>%s</h1>" % h_title
+            + "<div class=\"banner\" style=\"background:%s\">"
+            "%s\uff1a%s\uff08blockers=%s, warnings=%s, redlines=%s\uff09</div>"
+            % (color, esc(_("verdict", lang)), esc(v["verdict"]),
+               v["blockers"], v["warnings"], v["redlines"])
             + "<div class=\"dist\">"
             "<span style=\"background:#c62828\">critical %s</span>" % sc["critical"]
             + "<span style=\"background:#ef6c00\">high %s</span>" % sc["high"]
             + "<span style=\"background:#f9a825\">medium %s</span>" % sc["medium"]
             + "<span style=\"background:#757575\">low %s</span>" % sc["low"]
             + "</div>"
-            "<p>\u6280\u80fd\uff1a%s \u2502 \u5e73\u53f0\uff1a%s "
-            "\u2502 \u89c4\u8303\u7248\u672c\uff1a%s</p>"
-            % (esc(self.skill_name), esc(self.platform),
+            "<p>%s\uff1a%s \u2502 %s\uff1a%s \u2502 %s\uff1a%s</p>"
+            % (esc(_("skill", lang)), esc(self.skill_name),
+               esc(_("platform", lang)), esc(self.platform),
+               esc(_("spec_ver", lang)),
                esc(getattr(self, "spec_meta", {}).get("version", "")))
-            + "<table><thead><tr><th>\u4e25\u91cd\u5ea6</th><th>\u89c4\u5219</th>"
-            "<th>\u4f4d\u7f6e</th><th>\u7c7b\u522b</th><th>\u8bc1\u636e</th></tr></thead>"
+            + "<table><thead><tr>" + th + "</tr></thead>"
             "<tbody>" + rows_html + "</tbody></table>"
             "<p style=\"margin-top:18px;color:#666;font-size:12px\">%s</p>"
             % esc(GATE_DISCLAIMER)
@@ -1738,6 +1809,26 @@ def resolve_platform(cli_value, config_value) -> str:
     return platform
 
 
+def cross_verify(spg_issues: list, ext_issues: list) -> dict:
+    """P3-1 双向对标：比较本门禁（L0）与外部 SARIF（如 aig-skill-scan）的同包差异。
+
+    以 sarif_io.issue_identity（文件+规则+标题，跨来源前缀、不含行号）为身份键，
+    给出「双方共识 / 仅 SPG / 仅外部」三个计数。用途：同一 skill 在 SPG 与 A.I.G
+    上跑出的结果到底差在哪——这是对标可信度而非盲信任何一方的依据。
+
+    注：外部 SARIF 已按 L2 降级（封顶 medium），所以 common 只反映「同一位置都报了」，
+    不反映档位一致。档位差异是预期的（SPG 把外部结果当线索）。"""
+    spg_ids = {sarif_io.issue_identity(i) for i in (spg_issues or [])}
+    ext_ids = {sarif_io.issue_identity(i) for i in (ext_issues or [])}
+    return {
+        "spg_total": len(spg_issues or []),
+        "ext_total": len(ext_issues or []),
+        "common": len(spg_ids & ext_ids),
+        "spg_only": len(spg_ids - ext_ids),
+        "ext_only": len(ext_ids - spg_ids),
+    }
+
+
 def _handle_learn(args):
     """回灌模式：把发布后审核发现写回 feedback.json 即退出，不跑扫描。"""
     if args.learn is None:
@@ -1773,6 +1864,95 @@ def _validate_dir_and_platform(args, config):
         return resolve_platform(args.platform, config.get("platform"))
     except GateConfigError as exc:
         print(f"❌ {exc}", file=sys.stderr)
+        sys.exit(2)
+
+
+def _is_url(s: str) -> bool:
+    return bool(s) and re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://", s or "")
+
+
+def _acquire_target(args) -> tuple:
+    """把 --repo / --archive 解析成「本地可扫目录 + 待清理临时目录」。
+
+    P2-1 远程/归档扫描：在跑 `run_all` 之前先把远程仓库或归档拉到沙箱目录，
+    复用现有 check 逻辑（不重造判定）。返回 (scan_dir, tmp_root)：
+      · scan_dir：实际喂给 SkillHubGate 的目录
+      · tmp_root：非 None 时需要调用方在退出前 shutil.rmtree 清理
+
+    设计约束（与 SPG 哲学一致）：
+      · --offline 下禁止一切网络动作（repo 克隆 / archive URL 下载），这是
+        「防源码外传」的硬开关，违反即退出 2。本地归档文件不受此限（零出网）。
+      · 远程只接受 git 仓库（git clone --depth 1）；archive 只接受 .zip / .skill
+        （均按 zip 解包）。不认识的形态一律拒绝并报错，绝不静默按空目录扫。
+    """
+    repo = getattr(args, "repo", None)
+    archive = getattr(args, "archive", None)
+    if not repo and not archive:
+        return args.dir, None
+
+    if args.offline and (repo or _is_url(archive)):
+        print("❌ --offline 与 --repo/--archive(URL) 互斥：离线模式下禁止网络拉取"
+              "（这是防源码外传的硬开关，不是建议）", file=sys.stderr)
+        sys.exit(2)
+
+    tmp_root = tempfile.mkdtemp(prefix="spg-acquire-")
+    try:
+        if repo:
+            if not _is_url(repo) and not repo.endswith(".git"):
+                # 允许裸 ssh/git 形式（含 : 而非 //），其余当作本地路径报错
+                if "://" not in repo and not repo.startswith("git@"):
+                    print(f"❌ --repo 须为 git URL 或 .git 路径：{repo}",
+                          file=sys.stderr)
+                    shutil.rmtree(tmp_root, ignore_errors=True)
+                    sys.exit(2)
+            dest = os.path.join(tmp_root, "repo")
+            proc = subprocess.run(
+                ["git", "clone", "--depth", "1", repo, dest],
+                capture_output=True, text=True, timeout=180, check=False)
+            if proc.returncode != 0:
+                print(f"❌ --repo 克隆失败（{repo}）："
+                      f"{(proc.stderr or '').strip()[:200]}", file=sys.stderr)
+                shutil.rmtree(tmp_root, ignore_errors=True)
+                sys.exit(2)
+            return dest, tmp_root
+
+        # archive 分支
+        if _is_url(archive):
+            dl = os.path.join(tmp_root, "archive_dl")
+            try:
+                with urllib.request.urlopen(archive, timeout=120) as resp:  # nosec
+                    data = resp.read()
+            except Exception as exc:  # noqa: BLE001
+                print(f"❌ --archive URL 下载失败（{archive}）：{exc}",
+                      file=sys.stderr)
+                shutil.rmtree(tmp_root, ignore_errors=True)
+                sys.exit(2)
+            with open(dl, "wb") as fh:
+                fh.write(data)
+            archive_path = dl
+        else:
+            archive_path = archive
+            if not os.path.isfile(archive_path):
+                print(f"❌ --archive 本地文件不存在：{archive_path}",
+                      file=sys.stderr)
+                shutil.rmtree(tmp_root, ignore_errors=True)
+                sys.exit(2)
+        dest = os.path.join(tmp_root, "unpacked")
+        os.makedirs(dest, exist_ok=True)
+        try:
+            with zipfile.ZipFile(archive_path) as zf:
+                zf.extractall(dest)
+        except zipfile.BadZipFile:
+            print(f"❌ --archive 不是合法 zip/.skill 归档：{archive_path}",
+                  file=sys.stderr)
+            shutil.rmtree(tmp_root, ignore_errors=True)
+            sys.exit(2)
+        return dest, tmp_root
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ --repo/--archive 处理异常：{exc}", file=sys.stderr)
+        shutil.rmtree(tmp_root, ignore_errors=True)
         sys.exit(2)
 
 
@@ -1873,26 +2053,75 @@ def cmd_check(args):
         print("❌ --offline 与 --deep-scan 互斥：离线模式下禁止外部命令"
               "（这是防源码外传的硬开关，不是建议）", file=sys.stderr)
         sys.exit(2)
-
-    gate, err = _build_and_run_gate(args.dir, platform, config, args)
-    if err:
-        print(f"❌ 配置错误：{err}")
+    if args.offline and getattr(args, "adapter", None):
+        print("❌ --offline 与 --adapter 互斥：离线模式下禁止外部扫描器"
+              "（防源码外传的硬开关）", file=sys.stderr)
+        sys.exit(2)
+    if getattr(args, "repo", None) and getattr(args, "archive", None):
+        print("❌ --repo 与 --archive 不能同时指定，请二选一。", file=sys.stderr)
         sys.exit(2)
 
-    l2 = _load_shared_sarif(args)
-    notes = _run_stitching(gate, args, l2)
+    # P2-1：远程/归档先拉到沙箱目录；本地目录则原样扫描。
+    scan_dir, tmp_root = _acquire_target(args)
+    try:
+        gate, err = _build_and_run_gate(scan_dir, platform, config, args)
+        if err:
+            print(f"❌ 配置错误：{err}")
+            sys.exit(2)
 
-    out = gate.report(fmt=args.format, output_path=args.output)
-    if notes and args.format == "text":
-        print("── 缝接层 ──")
-        for n in notes:
-            print(f"  · {n}")
-    elif notes:
-        # json/sarif 消费方要能直接 pipe，缝接层日志改走 stderr
-        for n in notes:
-            print(f"· {n}", file=sys.stderr)
-    print(out)
-    sys.exit(gate.verdict()["exit_code"])
+        l2 = _load_shared_sarif(args)
+        notes = _run_stitching(gate, args, l2)
+
+        # P2-2：适配器 SDK（外部扫描器一行接入，结果按 L2 降一级并入）
+        adapter_name = getattr(args, "adapter", None)
+        if adapter_name:
+            from adapters import scan_with_adapter  # 延迟导入，避免无适配器时报缺模块
+            ad = scan_with_adapter(adapter_name, scan_dir)
+            if ad["issues"]:
+                gate.merge_external(ad["issues"])
+            notes += ad["notes"]
+            if args.format == "text":
+                for n in ad["notes"]:
+                    print(f"  · {n}")
+            else:
+                for n in ad["notes"]:
+                    print(f"· {n}", file=sys.stderr)
+
+        # P3-1：双向对标交叉验证（导入了外部 SARIF 才有意义）
+        cross = None
+        if l2:
+            spg_issues = [i for i in gate.issues if i.get("source") != "l2"]
+            cross = cross_verify(spg_issues, l2)
+
+        # P2-3：SBOM（CycloneDX）——独立产物，不影响 verdict
+        sbom = None
+        sbom_path = getattr(args, "sbom", None)
+        if sbom_path:
+            sbom = sca.to_sbom(
+                scan_dir, skill_name=gate.skill_name,
+                version=getattr(gate, "spec_meta", {}).get("version", ""),
+                db_path=os.path.join(os.path.dirname(os.path.abspath(sca.__file__)),
+                                     "vuln-deps.json"))
+            os.makedirs(os.path.dirname(os.path.abspath(sbom_path)) or ".",
+                       exist_ok=True)
+            with open(sbom_path, "w", encoding="utf-8") as fh:
+                json.dump(sbom, fh, indent=2, ensure_ascii=False)
+            print(f"SBOM 已写入: {sbom_path}", file=sys.stderr)
+
+        out = gate.report(fmt=args.format, output_path=args.output,
+                          lang=getattr(args, "lang", "zh"), cross=cross, sbom=sbom)
+        if notes and args.format == "text" and not adapter_name:
+            print("── 缝接层 ──")
+            for n in notes:
+                print(f"  · {n}")
+        elif notes and args.format != "text" and not adapter_name:
+            for n in notes:
+                print(f"· {n}", file=sys.stderr)
+        print(out)
+        sys.exit(gate.verdict()["exit_code"])
+    finally:
+        if tmp_root:
+            shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def _add_shared_scan_args(parser, with_baseline: bool = False) -> None:
@@ -2043,6 +2272,24 @@ def main():
     p_check.add_argument("--learn", default=None,
                          help="回灌：传入 JSON {\"type\":\"blocker|whitelist|warn\","
                               "\"pattern\":...,\"reason\":...}，写回 rules/feedback.json 后退出")
+    # P2-1 远程/归档扫描
+    p_check.add_argument("--repo", default=None,
+                         help="git 仓库 URL（或 .git 路径）：先 clone --depth 1 到临时"
+                              "沙箱再扫描；--offline 下禁用")
+    p_check.add_argument("--archive", default=None,
+                         help="本地或远程 .zip/.skill 归档：下载（远程）并解包到临时沙箱"
+                              "再扫描；本地归档不受 --offline 限制")
+    # P2-2 适配器 SDK
+    p_check.add_argument("--adapter", default=None,
+                         help="接入已注册外部扫描器（domsec/skillspector/codex_security/"
+                              "clawscan 等，见 scripts/adapters.d/）；结果按 L2 降一级并入"
+                              "判定，--offline 下禁用")
+    # P2-3 SBOM
+    p_check.add_argument("--sbom", default=None,
+                         help="导出 CycloneDX 1.5 SBOM 到指定路径（独立产物，不影响 verdict）")
+    # P3-3 多语言报告
+    p_check.add_argument("--lang", choices=["zh", "en"], default="zh",
+                         help="报告语言（text/html 的 UI 文案；json/sarif 为数据不翻译）")
     # --show-info / --all-files / --config / --strict / --sarif-* / --deep-scan / --offline
     # 都由共享定义提供，check 与 dirs 同源（G3：手抄两遍必然漂移）
     _add_shared_scan_args(p_check, with_baseline=True)

@@ -25,6 +25,8 @@ import json
 import os
 import re
 import sys
+import uuid
+from datetime import datetime, timezone
 
 _DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "vuln-deps.json")
@@ -242,3 +244,99 @@ def scan_skill(target_dir: str, db_path: str = None) -> dict:
                     "why": entry.get("summary", "已知漏洞版本"),
                 })
     return {"findings": findings, "notes": notes}
+
+
+def _purl(ecosystem: str, name: str, version: str = None) -> str:
+    """生成 CycloneDX purl。version 为空则省略 @ 段。"""
+    name = name.lower()
+    if version:
+        return f"pkg:{ecosystem}/{name}@{version}"
+    return f"pkg:{ecosystem}/{name}"
+
+
+def _collect_components(target_dir: str, db_path: str = None) -> list:
+    """汇总软件成分清单（SCA 的 SBOM 输入）。
+
+    两类来源：
+      1. 声明式钉版依赖（requirements / pyproject / package.json）→ 有版本号，
+         用对应生态 purl（pypi / npm）。
+      2. import 到的第三方模块（未钉版）→ 无版本号，pypi 生态，scope=optional。
+
+    去重键 (name, version)。永不抛异常。"""
+    db_path = db_path or _DEFAULT_DB
+    components = {}
+    try:
+        with open(db_path, "r", encoding="utf-8") as f:
+            db = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        db = {}
+    blessed = set(db.get("blessed", []))
+    stdlib = _stdlib_names()
+    local_mods = _local_module_names(target_dir)
+
+    # npm 生态判定：package.json 里声明的依赖名集合
+    npm_pkgs = set()
+    pj = os.path.join(target_dir, "package.json")
+    if os.path.isfile(pj):
+        try:
+            doc = json.load(open(pj, encoding="utf-8"))
+            for sec in ("dependencies", "devDependencies"):
+                npm_pkgs.update((doc.get(sec) or {}).keys())
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # 1. 钉版依赖
+    pinned = _parse_requirement_files(target_dir)
+    for pkg, ver in pinned.items():
+        eco = "npm" if pkg.lower() in {n.lower() for n in npm_pkgs} else "pypi"
+        components[(pkg.lower(), ver)] = {
+            "type": "library",
+            "name": pkg,
+            "version": ver,
+            "purl": _purl(eco, pkg, ver),
+            "scope": "required",
+        }
+    # 2. import 的第三方模块（未钉版）
+    imports = _collect_imports(target_dir, exclude=local_mods)
+    for mod, locs in sorted(imports.items()):
+        if mod in stdlib or mod in blessed:
+            continue
+        # 已钉版（import 名与钉版包名对应）跳过：避免重复
+        if mod.lower() in {p.lower() for p in pinned}:
+            continue
+        key = (mod.lower(), "")
+        if key in components:
+            continue
+        components[key] = {
+            "type": "library",
+            "name": mod,
+            "version": None,
+            "purl": _purl("pypi", mod),
+            "scope": "optional",
+        }
+    return list(components.values())
+
+
+def to_sbom(target_dir: str, skill_name: str = "", version: str = "",
+            db_path: str = None) -> dict:
+    """导出 CycloneDX 1.5 SBOM（P2-3）。
+
+    纯标准库构造，离线、确定性、零密钥。与 A.I.G（不产出 SBOM）形成差异化能力。
+    返回可直接 json.dump 的 dict；缺失时间戳等字段不写以保确定性。"""
+    components = _collect_components(target_dir, db_path)
+    bom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "serialNumber": "urn:uuid:" + str(uuid.uuid4()),
+        "version": 1,
+        "metadata": {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "component": {
+                "type": "application",
+                "name": skill_name or os.path.basename(os.path.normpath(target_dir)),
+                "version": version or "unknown",
+            },
+        },
+        "components": components,
+    }
+    return bom
